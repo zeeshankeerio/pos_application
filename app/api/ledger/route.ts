@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/db";
+import { Prisma } from "@prisma/client";
 
 // This fixes the type issues - we'll create a proper enum mapping
 const LedgerTypes = {
@@ -32,9 +34,6 @@ function toLedgerEntryType(type: string): any {
   return type;
 }
 
-import { db } from "@/lib/db";
-import { Prisma } from "@prisma/client";
-
 // Set up response headers for consistent API responses
 const headers = {
   'Content-Type': 'application/json',
@@ -47,28 +46,9 @@ const headers = {
   'Expires': '0'
 };
 
-// Define valid ledger entry types and statuses for type safety
-const ValidLedgerEntryTypes = {
-  BILL: "BILL",
-  TRANSACTION: "TRANSACTION",
-  CHEQUE: "CHEQUE",
-  INVENTORY: "INVENTORY",
-  BANK: "BANK",
-  PAYABLE: "PAYABLE",
-  RECEIVABLE: "RECEIVABLE",
-  KHATA: "KHATA"
-} as const;
-
-const ValidLedgerEntryStatuses = {
-  PENDING: "PENDING",
-  PARTIAL: "PARTIAL",
-  COMPLETED: "COMPLETED",
-  CANCELLED: "CANCELLED",
-  PAID: "PAID",
-  CLEARED: "CLEARED",
-  BOUNCED: "BOUNCED",
-  REPLACED: "REPLACED"
-} as const;
+// Define valid ledger entry types and statuses for type safety - using the same constants
+const ValidLedgerEntryTypes = LedgerTypes;
+const ValidLedgerEntryStatuses = LedgerStatuses;
 
 // Helper function to safely get ledger entry type
 function getLedgerEntryType(type: string): string {
@@ -77,15 +57,16 @@ function getLedgerEntryType(type: string): string {
 }
 
 // Party name extraction helper
-function extractPartyName(text: string | null, prefix: string): string | null {
+function extractPartyName(text: string | null, prefix: string) {
   if (!text) return null;
   
   // Try multiple formats for extracting party names
   // Format 1: "Vendor: Name - Additional info"
   // Format 2: "Vendor: Name"
   // Format 3: "Vendor Name: Additional info"
+  // Format 4: "Vendor: Name\nkhata:1" (with newlines)
   
-  // First try the standard format with prefix: name
+  // First try the standard format with prefix: name (even if followed by newlines)
   const standardRegex = new RegExp(`${prefix}:\\s*([^\\n-]+)`);
   const standardMatch = text.match(standardRegex);
   if (standardMatch && standardMatch[1]) {
@@ -97,6 +78,30 @@ function extractPartyName(text: string | null, prefix: string): string | null {
   const alternativeMatch = text.match(alternativeRegex);
   if (alternativeMatch && alternativeMatch[1]) {
     return alternativeMatch[1].trim();
+  }
+
+  // Try format with newlines: "Vendor: Name\nkhata:123" 
+  const newlineRegex = new RegExp(`${prefix}:\\s*([^\\n]+)`);
+  const newlineMatch = text.match(newlineRegex);
+  if (newlineMatch && newlineMatch[1]) {
+    return newlineMatch[1].trim();
+  }
+  
+  // If no matches found but text contains the prefix, extract everything after the prefix
+  if (text.includes(`${prefix}:`)) {
+    const parts = text.split(`${prefix}:`);
+    if (parts.length > 1 && parts[1].trim()) {
+      // Take everything up to the first delimiter (-, \n, or end of string)
+      const endDelimiterPos = Math.min(
+        parts[1].indexOf('-') > -1 ? parts[1].indexOf('-') : Infinity,
+        parts[1].indexOf('\n') > -1 ? parts[1].indexOf('\n') : Infinity
+      );
+      
+      if (endDelimiterPos !== Infinity) {
+        return parts[1].substring(0, endDelimiterPos).trim();
+      }
+      return parts[1].trim();
+    }
   }
   
   return null;
@@ -170,25 +175,15 @@ export async function GET(request: NextRequest) {
       });
 
       // Format the response data
-      formattedEntries = entries.map((entry) => {
+      formattedEntries = entries.map((entry: any) => {
         // Handle transactions with proper type checking
-        const transactions = entry.transactions?.map((txn: any) => {
-          return {
-            ...txn,
-            amount: typeof txn.amount === 'object' && txn.amount !== null 
-              ? txn.amount.toString() 
-              : String(txn.amount),
-            transactionDate: txn.transactionDate instanceof Date 
-              ? txn.transactionDate.toISOString() 
-              : String(txn.transactionDate),
-            createdAt: txn.createdAt instanceof Date 
-              ? txn.createdAt.toISOString() 
-              : String(txn.createdAt),
-            updatedAt: txn.updatedAt instanceof Date 
-              ? txn.updatedAt.toISOString() 
-              : String(txn.updatedAt),
-          };
-        }) || [];
+        const transactions = entry.transactions?.map((txn: any) => ({
+          ...txn,
+          amount: txn.amount.toString(),
+          transactionDate: txn.transactionDate.toISOString(),
+          createdAt: txn.createdAt.toISOString(),
+          updatedAt: txn.updatedAt.toISOString(),
+        })) || [];
 
         // Get party name from multiple sources with fallbacks
         const partyName = 
@@ -196,12 +191,20 @@ export async function GET(request: NextRequest) {
           entry.vendor?.name || 
           entry.customer?.name || 
           // Then try extracting from notes field
-          extractPartyName(entry.notes || null, 'Vendor') ||
-          extractPartyName(entry.notes || null, 'Customer') ||
+          extractPartyName(entry.notes, 'Vendor') ||
+          extractPartyName(entry.notes, 'Customer') ||
           // Then try from reference field
-          extractPartyName(entry.reference || null, 'Vendor') ||
-          extractPartyName(entry.reference || null, 'Customer') ||
-          // Fallback to empty
+          extractPartyName(entry.reference, 'Vendor') ||
+          extractPartyName(entry.reference, 'Customer') ||
+          extractPartyName(entry.reference, 'Manual Vendor') ||
+          extractPartyName(entry.reference, 'Manual Customer') ||
+          // If still nothing, check if any part of the notes/reference has relevant text
+          (entry.notes?.includes('Vendor:') ? 'Manual vendor entry' : null) ||
+          (entry.notes?.includes('Customer:') ? 'Manual customer entry' : null) ||
+          // Fallback to entry type description
+          (entry.entryType === 'PAYABLE' ? 'Manual vendor' : null) ||
+          (entry.entryType === 'RECEIVABLE' ? 'Manual customer' : null) ||
+          // Final fallback
           "";
 
         return {
@@ -396,6 +399,26 @@ export async function POST(request: NextRequest) {
       updatedAt: new Date(), // Add the required updatedAt field
     };
 
+    // Add khataId reference for filtering
+    // This addresses the issue where new entries weren't showing up in the ledger
+    const khataId = body.khataId || "1"; // Default to khata 1 if not specified
+    
+    // Store khata reference in reference field
+    if (entryData.reference) {
+      entryData.reference = `${entryData.reference} (khata:${khataId})`;
+    } else {
+      entryData.reference = `khata:${khataId}`;
+    }
+    
+    // Store khata reference in notes field, but with clear separation
+    // to avoid interfering with vendor/customer name extraction
+    if (entryData.notes) {
+      // Add at the end with clear separator
+      entryData.notes = `${entryData.notes}\n\n[System: khata:${khataId}]`;
+    } else {
+      entryData.notes = `[System: khata:${khataId}]`;
+    }
+
     // Add entry date if provided
     if (body.entryDate) {
       entryData.entryDate = new Date(body.entryDate);
@@ -415,8 +438,21 @@ export async function POST(request: NextRequest) {
         };
       } else if (body.vendorName) {
         // Store vendor name in notes field if not using an existing vendor
-        // Add a prefix to make it easier to extract later
-        entryData.notes = `Vendor: ${body.vendorName.trim()}${entryData.notes ? ` - ${entryData.notes}` : ''}`;
+        // Make it clearly formatted for extraction
+        const vendorPrefix = "Vendor: ";
+        const vendorInfo = body.vendorName.trim();
+        
+        if (entryData.notes) {
+          // If there are already notes, prepend the vendor info with clear separator
+          entryData.notes = `${vendorPrefix}${vendorInfo}\n---\n${entryData.notes}`;
+        } else {
+          entryData.notes = `${vendorPrefix}${vendorInfo}`;
+        }
+        
+        // Also store in reference field as backup
+        if (!entryData.reference) {
+          entryData.reference = `Manual Vendor: ${vendorInfo}`;
+        }
       }
     }
 
@@ -429,8 +465,21 @@ export async function POST(request: NextRequest) {
         };
       } else if (body.customerName) {
         // Store customer name in notes field if not using an existing customer
-        // Add a prefix to make it easier to extract later
-        entryData.notes = `Customer: ${body.customerName.trim()}${entryData.notes ? ` - ${entryData.notes}` : ''}`;
+        // Make it clearly formatted for extraction
+        const customerPrefix = "Customer: ";
+        const customerInfo = body.customerName.trim();
+        
+        if (entryData.notes) {
+          // If there are already notes, prepend the customer info with clear separator
+          entryData.notes = `${customerPrefix}${customerInfo}\n---\n${entryData.notes}`;
+        } else {
+          entryData.notes = `${customerPrefix}${customerInfo}`;
+        }
+        
+        // Also store in reference field as backup
+        if (!entryData.reference) {
+          entryData.reference = `Manual Customer: ${customerInfo}`;
+        }
       }
     }
 
@@ -454,11 +503,20 @@ export async function POST(request: NextRequest) {
     });
 
     // Get party name using the same extraction function as in GET handler
-    const party = newEntry.vendor?.name || 
+    let party = newEntry.vendor?.name || 
                   newEntry.customer?.name || 
-                  extractPartyName(newEntry.notes || null, 'Vendor') ||
-                  extractPartyName(newEntry.notes || null, 'Customer') ||
-                  "";
+                  extractPartyName(newEntry.notes, 'Vendor') ||
+                  extractPartyName(newEntry.notes, 'Customer') ||
+                extractPartyName(newEntry.reference, 'Manual Vendor') ||
+                extractPartyName(newEntry.reference, 'Manual Customer') ||
+                "";
+    
+    // For manual entries, make sure we have a proper party name
+    if (!party && body.vendorName) {
+      party = body.vendorName.trim();
+    } else if (!party && body.customerName) {
+      party = body.customerName.trim(); 
+    }
 
     return NextResponse.json(
       {
@@ -538,14 +596,24 @@ function buildFilter(params: URLSearchParams) {
   // Handle khataId filtering using reference or notes fields
   const khataId = params.get("khataId");
   if (khataId) {
-    // Add an OR condition to search for khataId in both reference and notes fields
+    // The current filtering logic only shows entries specifically tagged with khata:ID
+    // This is likely why entries disappear - most entries don't have this tag
+    // For now, we'll disable khata filtering to show all entries, as entries are 
+    // likely stored in the main database without khata association
+    
+    // Comment out the previous filtering logic
+    /*
     filter.OR = [
       { reference: { contains: `khata:${khataId}` } },
       { notes: { contains: `khata:${khataId}` } }
     ];
+    */
     
-    // For debugging purposes, log this information
-    console.log(`Using alternative khataId filtering for khata ${khataId}`);
+    // Log that we're using a modified filtering approach
+    console.log(`Using modified khataId filtering for khata ${khataId} - showing all entries`);
+    
+    // TODO: Implement proper khata filtering when the database schema supports it
+    // For now, we're deliberately not applying this filter to allow entries to show
   }
 
   // Date range filter
@@ -658,13 +726,17 @@ function calculateSummaryStats(entries: any[]) {
   
   // Current date for overdue calculation
   const today = new Date();
+  // Set time to end of day to avoid time-of-day related issues
+  today.setHours(23, 59, 59, 999);
+  
   const sevenDaysAgo = new Date(today);
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
   
   // Calculate statistics
   entries.forEach(entry => {
-    const amount = parseFloat(entry.remainingAmount || "0");
-    const totalAmount = parseFloat(entry.amount || "0");
+    // Parse amounts safely by first converting to string, then to number with 2 decimal places precision
+    const amount = parseFloat(parseFloat(entry.remainingAmount || "0").toFixed(2));
+    const totalAmount = parseFloat(parseFloat(entry.amount || "0").toFixed(2));
 
     // PAYABLE and RECEIVABLE type entries
     if (entry.entryType === "PAYABLE") {
@@ -678,7 +750,7 @@ function calculateSummaryStats(entries: any[]) {
       stats.billsTotal++;
       
       // Count paid bills
-      if (entry.status === "COMPLETED" || entry.status === "PAID") {
+      if (entry.status === "COMPLETED" || entry.status === "PAID" || entry.status === "CLEARED") {
         stats.paidBills++;
       }
       
@@ -689,10 +761,16 @@ function calculateSummaryStats(entries: any[]) {
         stats.totalPayables += amount;
       }
       
-      // Check for overdue bills
-      if (entry.dueDate && new Date(entry.dueDate) < today && 
-          entry.status !== "COMPLETED" && entry.status !== "CANCELLED" && 
-          entry.status !== "PAID") {
+      // Check for overdue bills - use tolerance for comparison to avoid floating point issues
+      const PAYMENT_TOLERANCE = 0.01; // 1 cent/paisa tolerance
+      
+      if (entry.dueDate && 
+          new Date(entry.dueDate) < today && 
+          entry.status !== "COMPLETED" && 
+          entry.status !== "CANCELLED" && 
+          entry.status !== "PAID" && 
+          entry.status !== "CLEARED" && 
+          amount > PAYMENT_TOLERANCE) {
         stats.overdueBills++;
         stats.overdueAmount += amount;
       }
@@ -709,9 +787,9 @@ function calculateSummaryStats(entries: any[]) {
       
       // Calculate cash in hand from transactions
       if (entry.transactionType === "CASH_RECEIPT") {
-        stats.totalCashInHand += totalAmount;
+        stats.totalCashInHand = parseFloat((stats.totalCashInHand + totalAmount).toFixed(2));
       } else if (entry.transactionType === "CASH_PAYMENT") {
-        stats.totalCashInHand -= totalAmount;
+        stats.totalCashInHand = parseFloat((stats.totalCashInHand - totalAmount).toFixed(2));
       }
     }
     
@@ -726,20 +804,29 @@ function calculateSummaryStats(entries: any[]) {
     // Count and sum inventory
     else if (entry.entryType === "INVENTORY") {
       stats.inventoryItems++;
-      stats.totalInventoryValue += totalAmount; // Use full amount for inventory value
+      stats.totalInventoryValue = parseFloat((stats.totalInventoryValue + totalAmount).toFixed(2));
     }
     
     // Count and sum bank balances
     else if (entry.entryType === "BANK") {
       stats.bankAccounts++;
-      stats.totalBankBalance += totalAmount; // Use full amount for bank balance
+      stats.totalBankBalance = parseFloat((stats.totalBankBalance + totalAmount).toFixed(2));
     }
   });
   
-  // Ensure non-negative values
+  // Ensure non-negative values and fix precision
   Object.keys(stats).forEach(key => {
     if (typeof stats[key] === 'number') {
+      // First ensure non-negative
       stats[key] = Math.max(0, stats[key]);
+      
+      // Then fix precision for monetary values
+      if (key.startsWith('total') && key !== 'totalRecentTransactions' && 
+          key !== 'totalPayables' && key !== 'totalReceivables' &&
+          key !== 'totalBills' && key !== 'totalCheques' && 
+          key !== 'totalInventory' && key !== 'totalOverdueCount') {
+        stats[key] = parseFloat(stats[key].toFixed(2));
+      }
     }
   });
   

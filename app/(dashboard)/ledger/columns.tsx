@@ -41,13 +41,43 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { LedgerEntryRow, UiLedgerEntryType, UiLedgerEntryStatus } from "@/app/lib/types";
 
 // Helper function to format currency in PKR
-export function formatCurrency(amount: number | string): string {
-  const numAmount = typeof amount === "string" ? parseFloat(amount) : amount;
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "PKR",
-    minimumFractionDigits: 0,
-  }).format(numAmount);
+export function formatCurrency(amount: number | string | null | undefined): string {
+  if (amount === null || amount === undefined) {
+    return "PKR 0";
+  }
+  
+  // First, ensure we're working with a number
+  let numAmount: number;
+  if (typeof amount === "string") {
+    // Remove any existing currency symbols or commas to avoid parsing errors
+    const cleanedAmount = amount.replace(/[^\d.-]/g, '');
+    numAmount = parseFloat(cleanedAmount);
+  } else {
+    numAmount = amount;
+  }
+  
+  // Handle NaN cases
+  if (isNaN(numAmount)) {
+    console.warn('Invalid amount for currency formatting:', amount);
+    return "PKR 0";
+  }
+  
+  // Round to 2 decimal places to avoid floating point precision issues
+  numAmount = Math.round(numAmount * 100) / 100;
+  
+  // Format with proper PKR currency symbol and consistent decimal places
+  try {
+    return new Intl.NumberFormat("en-PK", {
+      style: "currency",
+      currency: "PKR",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2, // Allow up to 2 decimal places for precision when needed
+    }).format(numAmount);
+  } catch (error) {
+    // Fallback formatting in case Intl formatter fails
+    const formatted = numAmount.toFixed(2);
+    return `PKR ${formatted.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+  }
 }
 
 // Helper function to format dates with proper handling of null/undefined

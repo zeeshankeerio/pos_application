@@ -110,16 +110,27 @@ const urduText = {
 
 // Helper function to adapt SalesOrderItem to the format expected by SalesInvoicePDF
 const adaptSalesOrderForPDF = (item: SalesOrderItem) => {
+    // Helper function to safely convert to Decimal
+    const safeDecimal = (value: any) => {
+        if (value === undefined || value === null) return null;
+        try {
+            return new Prisma.Decimal(value);
+        } catch (error) {
+            console.warn(`Failed to convert ${value} to Decimal:`, error);
+            return new Prisma.Decimal(0);
+        }
+    };
+
     return {
         ...item,
         // Convert string dates to Date objects
         orderDate: new Date(item.orderDate),
         deliveryDate: item.deliveryDate ? new Date(item.deliveryDate) : null,
         // Convert numeric values to Prisma.Decimal if needed
-        unitPrice: new Prisma.Decimal(item.unitPrice),
-        discount: item.discount ? new Prisma.Decimal(item.discount) : null,
-        tax: item.tax ? new Prisma.Decimal(item.tax) : null,
-        totalSale: new Prisma.Decimal(item.totalSale),
+        unitPrice: safeDecimal(item.unitPrice),
+        discount: safeDecimal(item.discount),
+        tax: safeDecimal(item.tax),
+        totalSale: safeDecimal(item.totalSale),
         // Fix string | undefined to string | null for fields that expect null
         deliveryAddress: item.deliveryAddress || null,
         remarks: item.remarks || null,
@@ -166,6 +177,15 @@ const adaptSalesOrderForPDF = (item: SalesOrderItem) => {
               },
         // Add any other required fields
         payments: item.payments || [],
+        // Process items array if present
+        items: item.items?.map(itemInCart => ({
+            ...itemInCart,
+            unitPrice: safeDecimal(itemInCart.unitPrice),
+            // Handle any other decimal fields in items
+            discount: safeDecimal(itemInCart.discount),
+            tax: safeDecimal(itemInCart.tax),
+            subtotal: safeDecimal(itemInCart.subtotal)
+        })) || []
     };
 };
 

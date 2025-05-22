@@ -183,6 +183,8 @@ function NewLedgerEntryContent() {
         },
         body: JSON.stringify({
           ...data,
+          // Include khataId from URL parameters to ensure proper association
+          khataId: searchParams?.get("khataId") || "1", // Default to khata 1 if not specified
           entryDate: data.entryDate.toISOString(),
           dueDate: data.dueDate ? data.dueDate.toISOString() : undefined,
         }),

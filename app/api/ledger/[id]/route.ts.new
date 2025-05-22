@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { Decimal } from "@/types/prismaTypes";
 import { PrismaLedgerEntryType as LedgerEntryType, PrismaLedgerEntryStatus as LedgerEntryStatus } from "@/app/lib/types";
 import { ledgerDb } from "@/app/lib/ledger-db";
-import { calculateRemainingAmount, PAYMENT_TOLERANCE } from "../utils";
+import { calculateRemainingAmount } from "../utils";
 
 // Set up response headers for consistent API responses
 const headers = {
@@ -67,56 +67,8 @@ export async function GET(
     let entry;
     let transactions: LedgerTransaction[] = [];
     
-    // First, try to find a direct ledger entry by ID
-    const ledgerEntry = await db.ledgerEntry.findUnique({
-      where: { id: parseInt(entryId) },
-      include: {
-        vendor: {
-          select: { id: true, name: true }
-        },
-        customer: {
-          select: { id: true, name: true }
-        },
-        transactions: {
-          orderBy: { transactionDate: 'desc' }
-        }
-      }
-    });
-    
-    if (ledgerEntry) {
-      // Format the ledger entry properly
-      const partyName = ledgerEntry.vendor?.name || 
-                        ledgerEntry.customer?.name || 
-                        'Unknown';
-      
-      entry = {
-        id: ledgerEntry.id.toString(),
-        entryType: ledgerEntry.entryType,
-        description: ledgerEntry.description,
-        party: partyName,
-        partyId: ledgerEntry.vendor?.id || ledgerEntry.customer?.id,
-        reference: ledgerEntry.reference,
-        transactionType: (ledgerEntry as any).transactionType || null,
-        entryDate: ledgerEntry.entryDate.toISOString(),
-        dueDate: ledgerEntry.dueDate?.toISOString() || null,
-        amount: ledgerEntry.amount.toString(),
-        remainingAmount: ledgerEntry.remainingAmount.toString(),
-        status: ledgerEntry.status,
-        notes: ledgerEntry.notes,
-        // Add displayEntryType for consistent UI display
-        displayEntryType: ledgerEntry.entryType === "BILL" && (ledgerEntry as any).transactionType 
-          ? (ledgerEntry as any).transactionType?.toUpperCase() === "SALE" 
-            ? "RECEIVABLE" 
-            : "PAYABLE"
-          : ledgerEntry.entryType
-      };
-      
-      if (ledgerEntry.transactions?.length) {
-        transactions = ledgerEntry.transactions as unknown as LedgerTransaction[];
-      }
-    }
-    // If no direct ledger entry found, try to find a bill with this ID
-    else if (entryType === 'bill' || !entryType) {
+    // If it's a bill
+    if (entryType === 'bill' || !entryType) {
       // Try to find a bill with this ID
       const bill = await ledgerDb.bill.findUnique({
         where: { id: parseInt(entryId) },
@@ -175,9 +127,7 @@ export async function GET(
             transactionDate: t.transactionDate.toISOString(),
             description: t.description,
             transactionType: t.transactionType
-          })) || [],
-          // Add displayEntryType for consistent UI display
-          displayEntryType: bill.billType === "SALE" ? "RECEIVABLE" : "PAYABLE"
+          })) || []
         };
         
         transactions = (bill.transactions || []) as unknown as LedgerTransaction[];
@@ -191,13 +141,6 @@ export async function GET(
         { status: 404 }
       );
     }
-    
-    // Log the entry being returned for debugging
-    console.log('API returning entry:', {
-      id: entry.id, 
-      entryType: entry.entryType,
-      transactionType: entry.transactionType
-    });
     
     // Return the entry
     return NextResponse.json({ entry, transactions });
@@ -284,9 +227,7 @@ export async function PATCH(
           amount: updatedEntry.amount.toString(),
           remainingAmount: calculateRemainingAmount(updatedEntry.amount, updatedEntry.paidAmount).toString(),
           status: updatedEntry.status,
-          notes: updatedEntry.description,
-          // Add displayEntryType for consistent UI display
-          displayEntryType: updatedEntry.billType === "SALE" ? "RECEIVABLE" : "PAYABLE"
+          notes: updatedEntry.description
         };
       }
     }

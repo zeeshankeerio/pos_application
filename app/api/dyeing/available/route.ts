@@ -11,7 +11,7 @@ export async function GET() {
         // First, get all successful dyeing processes
         const successfulDyeingProcesses = await db.dyeingProcess.findMany({
             where: {
-                resultStatus: "SUCCESS", // Only successful dyeing processes
+                resultStatus: "COMPLETED", // Changed from "SUCCESS" to "COMPLETED" to match form values
             },
             include: {
                 threadPurchase: {

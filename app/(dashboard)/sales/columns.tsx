@@ -121,7 +121,33 @@ export interface SalesOrderItem {
     }[];
     // Product name for display
     productName?: string;
+    // Multiple items in an order
+    items?: Array<{
+        id: number;
+        productType: ProductType;
+        productId: number;
+        productName?: string;
+        quantitySold: number;
+        unitPrice: number;
+        discount?: number;
+        tax?: number;
+        subtotal: number;
+        threadPurchase?: {
+            id: number;
+            threadType: string;
+            color?: string | null;
+            colorStatus: string;
+        } | null;
+        fabricProduction?: {
+            id: number;
+            fabricType: string;
+            dimensions?: string;
+        } | null;
+    }>;
 }
+
+// Define a type for the items in a sale
+type SaleItem = NonNullable<SalesOrderItem['items']>[number];
 
 // Define the columns for the sales data table
 export const columns: ColumnDef<SalesOrderItem>[] = [
@@ -197,40 +223,70 @@ export const columns: ColumnDef<SalesOrderItem>[] = [
             const data = row.original;
             const productType = data.productType;
 
+            // Check if there are multiple items
+            const hasMultipleItems = (data.items?.length ?? 0) > 1;
+
             let productName = data.productName || `#${data.productId}`;
 
-            if (!data.productName) {
-                if (productType === ProductType.THREAD && data.threadPurchase) {
-                    const tp = data.threadPurchase;
-                    productName = `${tp.threadType} - ${tp.colorStatus === "COLORED" ? tp.color : "Raw"}`;
-                    if (tp.vendorName) productName += ` (${tp.vendorName})`;
-                } else if (
-                    productType === ProductType.FABRIC &&
-                    data.fabricProduction
-                ) {
-                    const fp = data.fabricProduction;
-                    productName = `${fp.fabricType}${fp.dimensions ? ` - ${fp.dimensions}` : ""}`;
-                    if (fp.batchNumber)
-                        productName += ` (Batch: ${fp.batchNumber})`;
-                }
+            // Display for single item
+            if (!hasMultipleItems) {
+                return (
+                    <div className="max-w-[200px]">
+                        <div className="font-medium truncate">{productName}</div>
+                        {productType === "THREAD" && data.threadPurchase ? (
+                            <div className="text-muted-foreground flex items-center truncate text-xs">
+                                <span className="truncate">{data.threadPurchase.threadType}</span>
+                                {data.threadPurchase.color && (
+                                    <span className="ml-1">({data.threadPurchase.color})</span>
+                                )}
+                            </div>
+                        ) : productType === "FABRIC" && data.fabricProduction ? (
+                            <div className="text-muted-foreground flex items-center truncate text-xs">
+                                <span className="truncate">{data.fabricProduction.fabricType}</span>
+                                {data.fabricProduction.dimensions && (
+                                    <span className="ml-1">({data.fabricProduction.dimensions})</span>
+                                )}
+                            </div>
+                        ) : null}
+                    </div>
+                );
             }
-
+            
+            // Display for multiple items
             return (
+                <div className="max-w-[200px]">
+                    <div className="font-medium">
+                        Multiple Products ({data.items?.length || 0})
+                    </div>
+                    <div className="text-muted-foreground truncate text-xs">
+                        <span className="truncate">
+                            {data.items?.map((item: SaleItem) => item.productType)
+                                .filter((v: ProductType, i: number, a: ProductType[]) => a.indexOf(v) === i)
+                                .join(", ") || ""}
+                        </span>
+                    </div>
                 <TooltipProvider>
                     <Tooltip>
                         <TooltipTrigger asChild>
-                            <div className="flex items-center">
-                                <ShoppingBag className="text-muted-foreground mr-2 h-4 w-4" />
-                                <span className="max-w-[150px] truncate text-sm md:max-w-[180px]">
-                                    {productName}
-                                </span>
+                                <div className="text-primary mt-1 cursor-help text-xs underline">
+                                    View all items
                             </div>
                         </TooltipTrigger>
-                        <TooltipContent side="top">
-                            <p className="text-sm font-normal">{productName}</p>
+                            <TooltipContent className="w-[200px] p-0">
+                                <div className="max-h-[150px] overflow-y-auto p-2">
+                                    <div className="text-xs font-medium mb-1">Order contains:</div>
+                                    <ul className="space-y-1">
+                                        {data.items?.map((item: SaleItem, index: number) => (
+                                            <li key={index} className="text-xs">
+                                                • {item.productName || `#${item.productId}`} ({item.quantitySold} units)
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
                         </TooltipContent>
                     </Tooltip>
                 </TooltipProvider>
+                </div>
             );
         },
     },

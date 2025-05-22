@@ -277,18 +277,32 @@ interface SalesInvoiceProps {
         customerEmail?: string;
         customerCity?: string;
         customerNotes?: string;
+        productType?: string;
+        quantitySold?: number;
+        unitPrice?: number;
+        items?: Array<{
+            id: string;
+            productId: string;
+            productName: string;
+            productType: string;
+            quantitySold: number;
+            unitPrice: number;
+            threadPurchase?: ThreadPurchase | null;
+            fabricProduction?: FabricProduction | null;
+        }>;
     };
 }
 
 // The PDF document component
 const PDFInvoiceComponent = ({ salesOrder }: SalesInvoiceProps) => {
+    // Type assert the salesOrder to include the optional fields for easier destructuring
     const {
         orderNumber,
         orderDate,
         customer,
-        productType,
-        quantitySold,
-        unitPrice,
+        productType = "",
+        quantitySold = 0,
+        unitPrice = 0,
         discount = 0,
         tax = 0,
         totalSale,
@@ -299,6 +313,7 @@ const PDFInvoiceComponent = ({ salesOrder }: SalesInvoiceProps) => {
         payments = [],
         threadPurchase,
         fabricProduction,
+        items = [], // Provide default empty array
     } = salesOrder;
 
     // Get product details based on type
@@ -545,7 +560,41 @@ const PDFInvoiceComponent = ({ salesOrder }: SalesInvoiceProps) => {
                             </Text>
                         </View>
 
-                        {/* Table Row */}
+                        {/* Check if sale has multiple items */}
+                        {items && items.length > 0 ? (
+                            // Display multiple items
+                            items.map((item, index) => (
+                                <View key={item.id || index} style={styles.tableRow}>
+                                    <View style={[styles.tableCell, styles.col1]}>
+                                        <Text>{item.productName || `Product #${item.productId}`}</Text>
+                                        <Text style={styles.productDetails}>
+                                            {item.productType === "THREAD"
+                                                ? "Thread"
+                                                : "Fabric"}
+                                        </Text>
+                                        <Text style={styles.productDetails}>
+                                            {item.productType === "THREAD" && item.threadPurchase
+                                                ? `${item.threadPurchase.threadType}${item.threadPurchase.color ? ` - ${item.threadPurchase.color}` : ''}`
+                                                : item.productType === "FABRIC" && item.fabricProduction
+                                                    ? `${item.fabricProduction.fabricType}${item.fabricProduction.dimensions ? ` - ${item.fabricProduction.dimensions}` : ''}`
+                                                    : ""}
+                                        </Text>
+                                    </View>
+                                    <Text style={[styles.tableCell, styles.col2]}>
+                                        {item.quantitySold}
+                                    </Text>
+                                    <Text style={[styles.tableCell, styles.col3]}>
+                                        {formatCurrency(item.unitPrice)}
+                                    </Text>
+                                    <Text style={[styles.tableCell, styles.col4]}>
+                                        {formatCurrency(
+                                            Number(item.unitPrice) * item.quantitySold,
+                                        )}
+                                    </Text>
+                                </View>
+                            ))
+                        ) : (
+                            // Legacy single product display
                         <View style={styles.tableRow}>
                             <View style={[styles.tableCell, styles.col1]}>
                                 <Text>{productDetails.name}</Text>
@@ -570,6 +619,7 @@ const PDFInvoiceComponent = ({ salesOrder }: SalesInvoiceProps) => {
                                 )}
                             </Text>
                         </View>
+                        )}
                     </View>
 
                     {/* Summary */}
@@ -578,7 +628,9 @@ const PDFInvoiceComponent = ({ salesOrder }: SalesInvoiceProps) => {
                             <Text style={styles.summaryKey}>Subtotal:</Text>
                             <Text style={styles.summaryValue}>
                                 {formatCurrency(
-                                    Number(unitPrice) * quantitySold,
+                                    items && items.length > 0
+                                        ? items.reduce((sum, item) => sum + (Number(item.unitPrice) * item.quantitySold), 0)
+                                        : Number(unitPrice) * quantitySold
                                 )}
                             </Text>
                         </View>

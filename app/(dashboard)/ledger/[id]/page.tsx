@@ -16,6 +16,7 @@ import {
   Tags,
   Wallet,
   X,
+  RefreshCw,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 // Use a Record type to specify the index signature
 const statusColorMap: Record<string, string> = {
@@ -102,30 +108,85 @@ const formatTransactionType = (paymentMode: string) => {
 const extractPartyNameFromNotes = (notes: string | null | undefined): string | null => {
   if (!notes) return null;
   
+  // Try multiple formats for extracting party names
+  // Format 1: "Vendor: Name - Additional info"
+  // Format 2: "Vendor: Name"
+  // Format 3: "Vendor: Name\nkhata:1" (with newlines)
+  
   // First try to extract vendor name
   if (notes.includes('Vendor:')) {
-    const match = notes.match(/Vendor:\s*([^-\n]+)/);
-    if (match && match[1]) return match[1].trim();
+    // Standard format with prefix: name (even if followed by newlines)
+    const standardRegex = /Vendor:\s*([^\n-]+)/;
+    const standardMatch = notes.match(standardRegex);
+    if (standardMatch && standardMatch[1]) return standardMatch[1].trim();
+    
+    // Alternative format where the name might be followed by a hyphen
+    const alternativeRegex = /Vendor:\s*([^\n]+?)(?:\s*-|$)/;
+    const alternativeMatch = notes.match(alternativeRegex);
+    if (alternativeMatch && alternativeMatch[1]) return alternativeMatch[1].trim();
+    
+    // If no matches found but text contains the prefix, extract everything after the prefix
+    const parts = notes.split('Vendor:');
+    if (parts.length > 1 && parts[1].trim()) {
+      // Take everything up to the first delimiter (-, \n, or end of string)
+      const endDelimiterPos = Math.min(
+        parts[1].indexOf('-') > -1 ? parts[1].indexOf('-') : Infinity,
+        parts[1].indexOf('\n') > -1 ? parts[1].indexOf('\n') : Infinity
+      );
+      
+      if (endDelimiterPos !== Infinity) {
+        return parts[1].substring(0, endDelimiterPos).trim();
+      }
+      return parts[1].trim();
+    }
   }
   
-  // Then try to extract customer name
+  // If not vendor, try to extract customer name with the same patterns
   if (notes.includes('Customer:')) {
-    const match = notes.match(/Customer:\s*([^-\n]+)/);
-    if (match && match[1]) return match[1].trim();
+    // Standard format with prefix: name (even if followed by newlines)
+    const standardRegex = /Customer:\s*([^\n-]+)/;
+    const standardMatch = notes.match(standardRegex);
+    if (standardMatch && standardMatch[1]) return standardMatch[1].trim();
+    
+    // Alternative format where the name might be followed by a hyphen
+    const alternativeRegex = /Customer:\s*([^\n]+?)(?:\s*-|$)/;
+    const alternativeMatch = notes.match(alternativeRegex);
+    if (alternativeMatch && alternativeMatch[1]) return alternativeMatch[1].trim();
+    
+    // If no matches found but text contains the prefix, extract everything after the prefix
+    const parts = notes.split('Customer:');
+    if (parts.length > 1 && parts[1].trim()) {
+      // Take everything up to the first delimiter (-, \n, or end of string)
+      const endDelimiterPos = Math.min(
+        parts[1].indexOf('-') > -1 ? parts[1].indexOf('-') : Infinity,
+        parts[1].indexOf('\n') > -1 ? parts[1].indexOf('\n') : Infinity
+      );
+      
+      if (endDelimiterPos !== Infinity) {
+        return parts[1].substring(0, endDelimiterPos).trim();
+      }
+      return parts[1].trim();
+    }
   }
   
   return null;
 };
+
+// Extended type for LedgerEntryRow with our runtime-added properties
+interface ExtendedLedgerEntryRow extends LedgerEntryRow {
+  displayEntryType?: string;
+}
 
 export default function LedgerEntryPage() {
   const router = useRouter();
   const params = useParams();
   const id = params?.id as string;
   
-  const [entry, setEntry] = useState<LedgerEntryRow | null>(null);
+  const [entry, setEntry] = useState<ExtendedLedgerEntryRow | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
 
   // Fetch the ledger entry
   const fetchLedgerEntry = async () => {
@@ -133,13 +194,18 @@ export default function LedgerEntryPage() {
     
     setIsLoading(true);
     try {
-      console.log(`[Ledger] Fetching entry details for ID: ${id}`);
-      
-      const response = await fetch(`/api/ledger/${id}`, {
-        cache: 'no-store', // Don't cache this request
+      // Use cache-busting URL parameter and headers to prevent stale data
+      const timestamp = new Date().getTime();
+      const response = await fetch(`/api/ledger/${id}?refresh=${timestamp}`, {
+        method: "GET",
         headers: {
-          'x-request-time': Date.now().toString() // Add cache-busting header
-        }
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0', 
+          'X-Refresh-Timestamp': timestamp.toString()
+        },
+        cache: "no-store",
+        next: { revalidate: 0 }
       });
       
       if (!response.ok) {
@@ -148,23 +214,104 @@ export default function LedgerEntryPage() {
           router.push("/ledger");
           return;
         }
-        
-        // Try to get more error details from response
-        let errorDetails = "";
-        try {
-          const errorData = await response.json();
-          console.error("[Ledger] API error response:", errorData);
-          errorDetails = errorData.error || errorData.message || "";
-        } catch (parseError) {
-          console.error("[Ledger] Failed to parse error response:", parseError);
-        }
-        
-        throw new Error(`Failed to fetch ledger entry: ${errorDetails || response.statusText || response.status}`);
+        throw new Error("Failed to fetch ledger entry");
       }
       
       const data = await response.json();
-      setEntry(data.entry);
-      setTransactions(data.entry.transactions || []);
+      const entryData = data.entry;
+      
+      // For debugging data inconsistencies
+      console.log('Loaded entry data:', {
+        id: entryData.id,
+        amount: entryData.amount,
+        remainingAmount: entryData.remainingAmount,
+        status: entryData.status,
+        entryType: entryData.entryType,
+        transactionType: entryData.transactionType
+      });
+      
+      // Validate and fix possible data inconsistencies
+      if (entryData.amount && entryData.remainingAmount) {
+        // Parse values ensuring they're proper numbers
+        const amount = parseFloat(typeof entryData.amount === 'string' ? entryData.amount : entryData.amount.toString());
+        const remainingAmount = parseFloat(typeof entryData.remainingAmount === 'string' ? entryData.remainingAmount : entryData.remainingAmount.toString());
+        
+        // Fix remaining amount if it's greater than the total amount (shouldn't happen)
+        if (remainingAmount > amount + 0.005) {
+          console.warn(`Data inconsistency: Remaining amount (${remainingAmount}) greater than total (${amount}). Fixing...`);
+          entryData.remainingAmount = entryData.amount;
+        }
+        
+        // Fix status if paid in full but not marked complete
+        if (remainingAmount < 0.005 && entryData.status !== "COMPLETED" && entryData.status !== "PAID" && entryData.status !== "CANCELLED") {
+          console.warn(`Data inconsistency: Entry paid in full but status is ${entryData.status}. Should be COMPLETED/PAID.`);
+          entryData.status = entryData.entryType === "BILL" ? "PAID" : "COMPLETED";
+        }
+        
+        // Fix status if it shows PAID but has remaining balance
+        if ((entryData.status === "PAID" || entryData.status === "COMPLETED") && remainingAmount > 0.005) {
+          console.warn(`Data inconsistency: Entry marked as ${entryData.status} but has remaining balance of ${remainingAmount}. Fixing status...`);
+          entryData.status = remainingAmount < amount ? "PARTIAL" : "PENDING";
+        }
+      }
+      
+      // Normalize entry type to match what's shown in the list view
+      if (entryData.entryType === "BILL") {
+        console.log('Bill transaction type:', entryData.transactionType);
+        
+        // Ensure we're checking for both SALE/PURCHASE and case variations
+        const transactionType = entryData.transactionType?.toUpperCase();
+        
+        if (transactionType === "SALE") {
+          entryData.displayEntryType = "RECEIVABLE";
+        } else if (transactionType === "PURCHASE") {
+          entryData.displayEntryType = "PAYABLE";
+        } else {
+          // Default for unknown bill types
+          entryData.displayEntryType = entryData.entryType;
+        }
+        
+        console.log(`Set display type for bill to: ${entryData.displayEntryType}`);
+      } else {
+        // Respect the original entry type for non-BILL entries
+        entryData.displayEntryType = entryData.entryType;
+        console.log(`Using original entry type: ${entryData.entryType}`);
+      }
+
+      // Log the entry type assignment for debugging
+      console.log('Entry type assignment:', {
+        originalType: entryData.entryType,
+        transactionType: entryData.transactionType,
+        assignedDisplayType: entryData.displayEntryType
+      });
+      
+      // If party name is missing but notes contains vendor/customer info, extract it
+      if ((!entryData.party || entryData.party === 'Unknown' || entryData.party === "") && entryData.notes) {
+        const extractedParty = extractPartyNameFromNotes(entryData.notes);
+        if (extractedParty) {
+          entryData.party = extractedParty;
+        }
+      }
+      
+      // If still no party name, set a default based on entry type
+      if (!entryData.party || entryData.party === 'Unknown' || entryData.party === "") {
+        if (entryData.entryType === "PAYABLE" || (entryData.entryType === "BILL" && entryData.transactionType === "PURCHASE")) {
+          entryData.party = "Manual Vendor";
+        } else if (entryData.entryType === "RECEIVABLE" || (entryData.entryType === "BILL" && entryData.transactionType === "SALE")) {
+          entryData.party = "Manual Customer";
+        }
+      }
+      
+      // Format transactions if they exist
+      if (data.transactions) {
+        setTransactions(data.transactions);
+      } else if (entryData.transactions) {
+        setTransactions(entryData.transactions);
+      } else {
+        setTransactions([]);
+      }
+      
+      setEntry(entryData);
     } catch (error) {
       console.error("Error fetching ledger entry:", error);
       
@@ -180,6 +327,7 @@ export default function LedgerEntryPage() {
         setEntry({
           id: id,
           entryType: "PAYABLE",
+          displayEntryType: "PAYABLE",
           description: "Sample Entry (Connection Issue)",
           party: "Sample Vendor",
           reference: "SAMPLE-REF",
@@ -242,8 +390,21 @@ export default function LedgerEntryPage() {
   // Load data on initial render
   useEffect(() => {
     if (id) {
-    fetchLedgerEntry();
+      fetchLedgerEntry();
     }
+
+    // Add listener for returning from payment page
+    const handleFocus = () => {
+      console.log('[Ledger Detail] Window refocused, refreshing data...');
+      fetchLedgerEntry();
+    };
+
+    // Set up event listener to refresh data when the page regains focus
+    window.addEventListener('focus', handleFocus);
+    
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [id]);
 
   // Show loading state
@@ -290,8 +451,8 @@ export default function LedgerEntryPage() {
       return null;
     }
 
-    const isPayable = entry.entryType === "PAYABLE" || entry.entryType === "BILL" && entry.transactionType === "PURCHASE";
-    const isReceivable = entry.entryType === "RECEIVABLE" || entry.entryType === "BILL" && entry.transactionType === "SALE";
+    const isPayable = getDisplayEntryType(entry) === "PAYABLE";
+    const isReceivable = getDisplayEntryType(entry) === "RECEIVABLE";
     
     const buttonText = isPayable ? "Record Payment" : 
                        isReceivable ? "Record Receipt" : 
@@ -306,6 +467,34 @@ export default function LedgerEntryPage() {
       </Button>
     );
   };
+
+  // Helper function to get the display entry type based on entry data
+  function getDisplayEntryType(entry: ExtendedLedgerEntryRow): string {
+    // If entry already has a displayEntryType property, use it
+    if (entry.displayEntryType) {
+      return entry.displayEntryType;
+    }
+    
+    // For RECEIVABLE or PAYABLE entries, respect the original entry type
+    if (entry.entryType === "RECEIVABLE" || entry.entryType === "PAYABLE") {
+      return entry.entryType;
+    }
+    
+    // For BILL entries, determine based on transaction type
+    if (entry.entryType === "BILL") {
+      // Ensure consistent case handling for transaction type
+      const transactionType = entry.transactionType?.toUpperCase();
+      
+      if (transactionType === "SALE") {
+        return "RECEIVABLE";
+      } else if (transactionType === "PURCHASE") {
+        return "PAYABLE";
+      }
+    }
+    
+    // Default to original entry type if no special handling needed
+    return entry.entryType;
+  }
 
   return (
     <div className="container max-w-5xl py-6 space-y-6">
@@ -323,7 +512,11 @@ export default function LedgerEntryPage() {
           </Button>
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
-              {entry.entryType === "PAYABLE" ? "Payable" : "Receivable"} Details
+              {getDisplayEntryType(entry) === "PAYABLE" 
+                ? "Payable" 
+                : getDisplayEntryType(entry) === "RECEIVABLE" 
+                  ? "Receivable" 
+                  : entry.entryType} Details
             </h1>
             <p className="text-muted-foreground">
               {entry.description}
@@ -332,50 +525,24 @@ export default function LedgerEntryPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row">
           {renderPaymentButton()}
           
-          <Button variant="outline" asChild>
-            <Link href={`/ledger/${entry.id}/edit`}>
-              <FileEdit className="mr-2 h-4 w-4" />
-              Edit
-            </Link>
-          </Button>
-          
-          {entry.status !== "COMPLETED" && entry.status !== "CANCELLED" && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="outline" className="text-destructive">
-                  <X className="mr-2 h-4 w-4" />
-                  Cancel Entry
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will mark the entry as cancelled. This action cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={handleCancelEntry}
-                    disabled={isCancelling}
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  >
-                    {isCancelling ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Cancelling...
-                      </>
-                    ) : (
-                      "Yes, Cancel Entry"
-                    )}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+          {entry.status !== "CANCELLED" && (
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => setShowCancelDialog(true)}
+              className="text-destructive hover:text-destructive"
+              disabled={isCancelling}
+            >
+              {isCancelling ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <X className="mr-2 h-4 w-4" />
+              )}
+              Cancel Entry
+            </Button>
           )}
         </div>
       </div>
@@ -394,8 +561,8 @@ export default function LedgerEntryPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Type</p>
-                <Badge variant="outline" className={typeColorMap[entry.entryType]}>
-                  {entry.entryType}
+                <Badge variant="outline" className={typeColorMap[getDisplayEntryType(entry)] || typeColorMap.BILL}>
+                  {getDisplayEntryType(entry)}
                 </Badge>
               </div>
               <div>
@@ -427,7 +594,7 @@ export default function LedgerEntryPage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="col-span-2">
                 <p className="text-sm font-medium text-muted-foreground">
-                  {entry.entryType === "PAYABLE" ? "Vendor" : "Customer"}
+                  {getDisplayEntryType(entry) === "PAYABLE" ? "Vendor" : "Customer"}
                 </p>
                 <p className="font-medium">
                   {entry.vendor
@@ -436,6 +603,7 @@ export default function LedgerEntryPage() {
                     ? entry.customer.name
                     : entry.manualPartyName
                     || extractPartyNameFromNotes(entry.notes)
+                    || entry.party
                     || "N/A"}
                 </p>
               </div>
@@ -476,13 +644,13 @@ export default function LedgerEntryPage() {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-semibold tracking-tight">
-            {entry.entryType === "PAYABLE" ? "Payments" : "Receipts"}
+            {getDisplayEntryType(entry) === "PAYABLE" ? "Payments" : "Receipts"}
           </h2>
           {entry.status !== "COMPLETED" && entry.status !== "CANCELLED" && (
             <Button asChild variant="outline" size="sm">
               <Link href={`/ledger/${entry.id}/payment`}>
                 <Wallet className="mr-2 h-4 w-4" />
-                Add {entry.entryType === "PAYABLE" ? "Payment" : "Receipt"}
+                Add {getDisplayEntryType(entry) === "PAYABLE" ? "Payment" : "Receipt"}
               </Link>
             </Button>
           )}
@@ -496,72 +664,87 @@ export default function LedgerEntryPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-        {transactions.length > 0 ? (
-              <div className="border rounded-md overflow-hidden">
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Method</TableHead>
                   <TableHead>Date</TableHead>
-                  <TableHead>Amount</TableHead>
-                      <TableHead>Method</TableHead>
-                  <TableHead>Reference</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="text-right">Notes</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {transactions.map((transaction) => (
-                  <TableRow key={transaction.id}>
-                    <TableCell>
-                          <div className="font-medium">
-                            {format(new Date(transaction.transactionDate), "MMM d, yyyy")}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {format(new Date(transaction.transactionDate), "h:mm a")}
-                          </div>
-                    </TableCell>
-                    <TableCell>
-                          <div className="font-medium">
-                            {formatCurrency(transaction.amount)}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                          <div className="flex items-center gap-1">
-                            {formatTransactionType(transaction.paymentMode)}
-                            {transaction.paymentMode === "CHEQUE" && (
-                              <span className="text-xs text-muted-foreground ml-1">
-                                (#{transaction.chequeNumber})
-                              </span>
-                            )}
-                          </div>
-                          {transaction.bankName && (
-                            <div className="text-xs text-muted-foreground">
-                              {transaction.bankName}
-                            </div>
-                          )}
-                    </TableCell>
-                    <TableCell>
-                          {transaction.referenceNumber ? (
-                            <span>{transaction.referenceNumber}</span>
-                          ) : (
-                            <span className="text-muted-foreground text-xs">No Reference</span>
-                          )}
-                          {transaction.notes && (
-                            <div className="text-xs text-muted-foreground truncate max-w-[200px]">
-                              {transaction.notes}
-                            </div>
-                          )}
+                {transactions.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center text-muted-foreground py-6">
+                      No transactions recorded yet
                     </TableCell>
                   </TableRow>
-                ))}
+                ) : (
+                  transactions.map((transaction) => {
+                    // Extract additional information from transaction notes
+                    let partyInfo = "";
+                    if (transaction.notes && transaction.notes.includes("Party:")) {
+                      const match = transaction.notes.match(/Party:\s*([^\n]+)/);
+                      if (match && match[1]) {
+                        partyInfo = match[1].trim();
+                      }
+                    }
+                    
+                    return (
+                      <TableRow key={transaction.id}>
+                        <TableCell className="font-medium">
+                          {formatTransactionType(transaction.paymentMode)}
+                          {transaction.paymentMode === "CHEQUE" && transaction.chequeNumber && (
+                            <div className="text-xs text-muted-foreground mt-1">
+                              Cheque: {transaction.chequeNumber}
+                              {transaction.bankName && ` (${transaction.bankName})`}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {format(new Date(transaction.transactionDate), "PP")}
+                          {transaction.referenceNumber && (
+                            <div className="text-xs text-muted-foreground mt-1">
+                              Ref: {transaction.referenceNumber}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-semibold text-right">
+                          {formatCurrency(parseFloat(transaction.amount))}
+                          {partyInfo && (
+                            <div className="text-xs text-muted-foreground mt-1 text-right">
+                              {partyInfo}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {transaction.notes ? (
+                            <Popover>
+                              <PopoverTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-6 w-6">
+                                  <FilePenLine className="h-3 w-3" />
+                                </Button>
+                              </PopoverTrigger>
+                              <PopoverContent align="end" className="w-[240px]">
+                                <div className="space-y-2">
+                                  <h4 className="text-sm font-semibold">Notes</h4>
+                                  <p className="text-xs">{transaction.notes}</p>
+                                </div>
+                              </PopoverContent>
+                            </Popover>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">No notes</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
               </TableBody>
             </Table>
-          </div>
-        ) : (
-              <div className="text-center p-4 border rounded-md bg-muted/50">
-                <p className="text-muted-foreground">No transactions recorded yet.</p>
-              </div>
-              )}
-            </CardContent>
-          </Card>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="text-sm text-muted-foreground flex items-center gap-1">
@@ -572,6 +755,35 @@ export default function LedgerEntryPage() {
             ` • Last updated on ${format(new Date(entry.updatedAt), "PPP")}`}
         </span>
       </div>
+
+      {/* Cancel Entry Dialog */}
+      <AlertDialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will mark the entry as cancelled. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>No, keep it</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleCancelEntry}
+              disabled={isCancelling}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isCancelling ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                "Yes, Cancel Entry"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 } 

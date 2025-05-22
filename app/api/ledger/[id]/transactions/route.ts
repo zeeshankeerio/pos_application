@@ -24,7 +24,7 @@ export async function GET(
 ) {
   try {
     // Ensure we properly await params before accessing
-    const { id: idParam } = await context.params;
+    const { id: idParam } = await Promise.resolve(context.params);
     const id = parseInt(idParam);
 
     if (isNaN(id)) {

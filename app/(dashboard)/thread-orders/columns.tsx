@@ -405,7 +405,7 @@ export const columns: ColumnDef<ThreadPurchase>[] = [
                     </DropdownMenuTrigger>
                     <DropdownMenuContent
                         align="end"
-                        className="border-[var(--border)] w-[180px]"
+                        className="border-border w-[180px]"
                     >
                         <DropdownMenuLabel className="text-muted-foreground px-2 py-1.5 text-xs font-medium">
                             Actions

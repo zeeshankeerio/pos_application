@@ -333,6 +333,64 @@ export function InvoicePrintTemplate({
                             </tr>
                         </thead>
                         <tbody>
+                            {/* Check if sale has multiple items */}
+                            {(sale.items?.length ?? 0) > 0 ? (
+                                // Map through all items
+                                sale.items?.map((item, index) => (
+                                    <tr key={item.id || index} className="border-t border-gray-200">
+                                        <td className={`px-4 py-3 ${textAlignLeftClass}`}>
+                                            <div>
+                                                <p className={`font-medium text-gray-800 ${isRTL ? "text-right" : ""}`}>
+                                                    {item.productName || `#${item.productId}`}
+                                                </p>
+                                                <p className={`text-xs text-gray-500 ${isRTL ? "text-right" : ""}`}>
+                                                    {item.productType}
+                                                </p>
+                                                {item.productType === "THREAD" &&
+                                                    item.threadPurchase && (
+                                                        <div className={`mt-1 text-xs text-gray-500 ${isRTL ? "text-right" : ""}`}>
+                                                            <p>
+                                                                {t("thread_type")}:{" "}
+                                                                {item.threadPurchase.threadType}
+                                                            </p>
+                                                            {item.threadPurchase.color && (
+                                                                <p>
+                                                                    {t("color")}:{" "}
+                                                                    {item.threadPurchase.color}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                {item.productType === "FABRIC" &&
+                                                    item.fabricProduction && (
+                                                        <div className={`mt-1 text-xs text-gray-500 ${isRTL ? "text-right" : ""}`}>
+                                                            <p>
+                                                                {t("fabric_type")}:{" "}
+                                                                {item.fabricProduction.fabricType}
+                                                            </p>
+                                                            {item.fabricProduction.dimensions && (
+                                                                <p>
+                                                                    {t("dimensions")}:{" "}
+                                                                    {item.fabricProduction.dimensions}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-3 text-center">
+                                            {item.quantitySold}
+                                        </td>
+                                        <td className={`px-4 py-3 ${textAlignRightClass}`}>
+                                            {formatCurrency(item.unitPrice)}
+                                        </td>
+                                        <td className={`px-4 py-3 font-medium ${textAlignRightClass}`}>
+                                            {formatCurrency(item.unitPrice * item.quantitySold)}
+                                        </td>
+                                    </tr>
+                                ))
+                            ) : (
+                                // Legacy single product display
                             <tr className="border-t border-gray-200">
                                 <td className={`px-4 py-3 ${textAlignLeftClass}`}>
                                     <div>
@@ -403,6 +461,7 @@ export function InvoicePrintTemplate({
                                     )}
                                 </td>
                             </tr>
+                            )}
                             {sale.remarks && (
                                 <tr className="border-t border-gray-200 bg-gray-50">
                                     <td colSpan={4} className="px-4 py-3">
@@ -434,7 +493,9 @@ export function InvoicePrintTemplate({
                             <span className={`text-gray-600 ${textAlignClass}`}>{t("subtotal")}:</span>
                             <span className="font-medium">
                                 {formatCurrency(
-                                    sale.unitPrice * sale.quantitySold,
+                                    (sale.items?.length ?? 0) > 0 
+                                        ? sale.items?.reduce((sum, item) => sum + (item.unitPrice * item.quantitySold), 0) ?? 0
+                                        : sale.unitPrice * sale.quantitySold
                                 )}
                             </span>
                         </div>

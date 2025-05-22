@@ -46,6 +46,10 @@ interface AnalyticsData {
     }[];
 }
 
+interface DyeingAnalyticsProps {
+    refreshTrigger?: number;
+}
+
 // Color palette for charts
 const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#8884D8"];
 
@@ -99,7 +103,7 @@ const renderCustomizedLabel = ({
     );
 };
 
-export function DyeingAnalytics() {
+export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(
@@ -112,7 +116,7 @@ export function DyeingAnalytics() {
             setLoading(true);
             setError(null);
             try {
-                const response = await fetch("/api/dyeing/analytics");
+                const response = await fetch(`/api/dyeing/analytics?t=${Date.now()}`);
                 if (!response.ok) {
                     throw new Error(
                         `Failed to fetch analytics data: ${response.status}`,
@@ -156,7 +160,7 @@ export function DyeingAnalytics() {
 
         fetchAnalytics();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [toast]);
+    }, [refreshTrigger]);
 
     if (loading) {
         return (

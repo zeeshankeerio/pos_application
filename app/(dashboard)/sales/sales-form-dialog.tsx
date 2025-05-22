@@ -478,23 +478,31 @@ export function SalesFormDialog({
     useEffect(() => {
         try {
             const quantity = safeParseInt(quantitySold); // Use integer for quantity
-            const price = safeParseFloat(salePrice);
-            const discountValue = safeParseFloat(itemDiscount);
-            const taxValue = safeParseFloat(itemTax);
+            const price = safeParseFloat(salePrice || "0");
+            const discountValue = safeParseFloat(itemDiscount || "0");
+            const taxValue = safeParseFloat(itemTax || "0");
+
+            if (!quantity || !price) {
+                setCurrentItemSubtotal(0);
+                return;
+            }
 
             // Calculate base amount
             const baseAmount = quantity * price;
             
+            // Verify discount doesn't exceed base amount
+            const validDiscount = Math.min(discountValue, baseAmount);
+            
             // Apply discount
-            let subtotal = discountValue > 0 ? Math.max(0, baseAmount - discountValue) : baseAmount;
+            let subtotal = baseAmount - validDiscount;
             
             // Apply tax
             if (taxValue > 0) {
                 subtotal += taxValue;
             }
 
-            // Round to 2 decimal places consistently
-            subtotal = parseFloat((Math.round(subtotal * 100) / 100).toFixed(2));
+            // Round to 2 decimal places consistently to avoid floating point issues
+            subtotal = parseFloat((Math.round((subtotal + Number.EPSILON) * 100) / 100).toFixed(2));
 
             setCurrentItemSubtotal(subtotal);
         } catch (error) {
@@ -503,7 +511,7 @@ export function SalesFormDialog({
         }
     }, [quantitySold, salePrice, itemDiscount, itemTax]);
 
-    // Replace the calculateOrderTotals function with this improved version
+    // Enhanced calculateOrderTotals function with better precision for multiple products
     const calculateOrderTotals = useCallback(() => {
         if (cartItems.length === 0) {
             setCalculatedTotal(0);
@@ -511,21 +519,19 @@ export function SalesFormDialog({
             return;
         }
 
-        console.log("Calculating totals for", cartItems.length, "items:", 
-            cartItems.map(i => ({name: i.name, subtotal: i.subtotal})));
-
-        // Calculate sum of all item subtotals with proper precision handling
-        const itemsTotal = cartItems.reduce((sum, item) => {
+        // First calculate the sum of all item subtotals with proper precision handling
+        let itemsTotal = cartItems.reduce((sum, item) => {
             // Parse the subtotal to ensure we're dealing with clean numbers
             const itemSubtotal = parseFloat(parseFloat(item.subtotal.toString()).toFixed(2));
             return sum + (isNaN(itemSubtotal) ? 0 : itemSubtotal);
         }, 0);
         
-        console.log("Raw items total:", itemsTotal);
+        // Round the items total to 2 decimal places
+        itemsTotal = parseFloat(itemsTotal.toFixed(2));
         
         // Get order-level adjustments
-        const orderDiscount = safeParseFloat(form.getValues("discount"));
-        const orderTax = safeParseFloat(form.getValues("tax"));
+        const orderDiscount = safeParseFloat(form.getValues("discount") || "0");
+        const orderTax = safeParseFloat(form.getValues("tax") || "0");
 
         // Apply order-level discount first (never go below zero)
         let total = Math.max(0, itemsTotal - orderDiscount);
@@ -537,32 +543,34 @@ export function SalesFormDialog({
 
         // Fix JavaScript floating point issues for money values
         // Add a small epsilon and round to 2 decimal places
-        total = Math.round((total + Number.EPSILON) * 100) / 100;
+        total = parseFloat((Math.round((total + Number.EPSILON) * 100) / 100).toFixed(2));
         
-        console.log("After calculations total:", total, "with discount:", orderDiscount, "and tax:", orderTax);
-
         // IMPORTANT: If we have items but total is zero or negative, set a minimum value
         // This fixes the "total must be greater than zero" issue
         if (cartItems.length > 0 && total <= 0) {
-            console.log("Setting minimum total because current total is zero or negative");
             total = 0.01; // Minimum value to avoid validation errors
         }
 
-        console.log("Final total being set:", total);
+        // Update the total in both local state and form state
         setCalculatedTotal(total);
         form.setValue("totalSale", total);
 
-        // Update payment amount for PAID status
+        // Update payment amount based on payment status
         const paymentStatus = form.getValues("paymentStatus");
-        const currentPaymentAmount = safeParseFloat(form.getValues("paymentAmount"));
+        const currentPaymentAmount = safeParseFloat(form.getValues("paymentAmount") || "0");
         
         if (paymentStatus === "PAID") {
-            // For PAID, always match the total exactly
+            // For PAID status, always match the total exactly
             form.setValue("paymentAmount", total.toFixed(2));
         } else if (paymentStatus === "PARTIAL") {
             // For partial payment, ensure it doesn't exceed total
             if (currentPaymentAmount > total) {
                 form.setValue("paymentAmount", total.toFixed(2));
+            }
+        } else if (paymentStatus === "PENDING") {
+            // For pending, ensure payment amount is 0
+            if (currentPaymentAmount > 0) {
+                form.setValue("paymentAmount", "0");
             }
         }
     }, [cartItems, form]);
@@ -1119,8 +1127,12 @@ export function SalesFormDialog({
     }, []);
 
     // Add new function to format all currency amounts consistently
-    const formatAmount = (value: number): string => {
-        return value.toFixed(2);
+    const formatAmount = (value: number | string): string => {
+        if (typeof value === 'string') {
+            value = parseFloat(value) || 0;
+        }
+        // Add a small epsilon to prevent floating point issues
+        return (Math.round((value + Number.EPSILON) * 100) / 100).toFixed(2);
     };
 
     // Enhance the onSubmit function to handle the case better
@@ -1152,8 +1164,6 @@ export function SalesFormDialog({
             // Get the latest calculated total
             let finalTotal = calculatedTotal;
             
-            console.log("Submission check - initial finalTotal:", finalTotal);
-            
             // Extra safeguard for zero total with items in cart
             if (finalTotal <= 0 && cartItems.length > 0) {
                 // Check if any item has a valid subtotal
@@ -1165,14 +1175,10 @@ export function SalesFormDialog({
                         return sum + parseFloat(parseFloat(item.subtotal.toString()).toFixed(2));
                     }, 0);
                     
-                    console.log("Manual recalculation of total from items:", manualTotal);
-                    
                     // Ensure we have a positive value
                     finalTotal = Math.max(0.01, manualTotal);
                     setCalculatedTotal(finalTotal);
                     form.setValue("totalSale", finalTotal);
-                    
-                    console.log("Recalculated finalTotal:", finalTotal);
                 } else {
                     toast.error("Total sale amount must be greater than zero");
                     setLoading(false);
@@ -1182,18 +1188,10 @@ export function SalesFormDialog({
             
             // Format the final total safely for consistency
             finalTotal = parseFloat(finalTotal.toFixed(2));
-            
-            // Log submission data for debugging
-            console.log("Submission check: ", {
-                itemCount: cartItems.length,
-                itemTotals: cartItems.map(i => i.subtotal),
-                calculatedTotal: calculatedTotal,
-                finalTotal: finalTotal
-            });
 
             // Validate payment information
             if ((data.paymentStatus === "PAID" || data.paymentStatus === "PARTIAL")) {
-                const paymentAmount = safeParseFloat(data.paymentAmount);
+                const paymentAmount = safeParseFloat(data.paymentAmount || "0");
                 
                 if (!paymentAmount || paymentAmount <= 0) {
                     toast.error(`Payment amount is required for ${data.paymentStatus.toLowerCase()} status`);
@@ -1263,8 +1261,8 @@ export function SalesFormDialog({
                 branch: data.paymentMode === "CHEQUE" ? data.branch : undefined,
                 paymentAmount: (data.paymentStatus === "PAID" || data.paymentStatus === "PARTIAL") && data.paymentAmount ? 
                     parseFloat(parseFloat(data.paymentAmount).toFixed(2)) : undefined,
-                discount: data.discount ? parseFloat(parseFloat(data.discount).toFixed(2)) : 0,
-                tax: data.tax ? parseFloat(parseFloat(data.tax).toFixed(2)) : 0,
+                discount: safeParseFloat(data.discount || "0"),
+                tax: safeParseFloat(data.tax || "0"),
                 totalSale: finalTotal,
                 items: cartItems.map(item => ({
                     productType: item.productType,
@@ -1497,7 +1495,7 @@ export function SalesFormDialog({
         return () => subscription.unsubscribe();
     }, [form, selectedProduct]);
 
-    // Improve the addItemToCart function with better calculation precision
+    // Improve the addItemToCart function with better calculation precision and duplicate handling
     const addItemToCart = () => {
         setAddingToCart(true);
         try {
@@ -1517,6 +1515,74 @@ export function SalesFormDialog({
                 return;
             }
 
+            // Check if this product is already in the cart
+            const existingProductIndex = cartItems.findIndex(item => 
+                item.productType === selectedProduct.type &&
+                item.productId === selectedProduct.id
+            );
+
+            if (existingProductIndex !== -1) {
+                // If product is already in cart, ask user if they want to update quantity instead
+                if (confirm(`${selectedProduct.name} is already in the cart. Do you want to update the quantity instead?`)) {
+                    // Get current cart items
+                    const updatedCartItems = [...cartItems];
+                    const existingItem = updatedCartItems[existingProductIndex];
+                    
+                    // Validate total quantity doesn't exceed available stock
+                    const newTotalQuantity = existingItem.quantity + quantity;
+                    
+                    if (newTotalQuantity > selectedProduct.available) {
+                        toast.error(`Cannot exceed available quantity of ${selectedProduct.available}`);
+                        form.setError("quantitySold", {
+                            type: "manual",
+                            message: `Maximum available: ${selectedProduct.available}`
+                        });
+                        setAddingToCart(false);
+                        return;
+                    }
+                    
+                    // Update quantity and recalculate values
+                    const price = safeParseFloat(form.watch("salePrice") || "0");
+                    const discount = safeParseFloat(form.watch("itemDiscount") || "0");
+                    const tax = safeParseFloat(form.watch("itemTax") || "0");
+                    
+                    const baseAmount = newTotalQuantity * price;
+                    const afterDiscount = Math.max(0, baseAmount - discount);
+                    const subtotal = afterDiscount + tax;
+                    const finalSubtotal = parseFloat((Math.round((subtotal + Number.EPSILON) * 100) / 100).toFixed(2));
+                    
+                    // Update the item in the cart
+                    updatedCartItems[existingProductIndex] = {
+                        ...existingItem,
+                        quantity: newTotalQuantity,
+                        unitPrice: parseFloat(price.toFixed(2)),
+                        discount: parseFloat(discount.toFixed(2)),
+                        tax: parseFloat(tax.toFixed(2)),
+                        subtotal: finalSubtotal
+                    };
+                    
+                    // Update cart and show success message
+                    setCartItems(updatedCartItems);
+                    toast.success(`Updated ${selectedProduct.name} quantity to ${newTotalQuantity}`);
+                    
+                    // Reset form fields
+                    form.setValue("productId", "");
+                    form.setValue("quantitySold", "");
+                    form.setValue("salePrice", "");
+                    form.setValue("itemDiscount", "");
+                    form.setValue("itemTax", "");
+                    form.setValue("sourceProductId", "");
+                    form.setValue("inventoryItemId", "");
+                    setSelectedProduct(null);
+                    setCurrentItemSubtotal(0);
+                    
+                    // Recalculate order totals
+                    calculateOrderTotals();
+                    setAddingToCart(false);
+                    return;
+                }
+            }
+
             if (quantity > selectedProduct.available) {
                 toast.error(`Cannot exceed available quantity of ${selectedProduct.available}`);
                 form.setError("quantitySold", {
@@ -1527,7 +1593,7 @@ export function SalesFormDialog({
             }
 
             // Validate price
-            const price = safeParseFloat(form.watch("salePrice"));
+            const price = safeParseFloat(form.watch("salePrice") || "0");
             if (!price || price <= 0) {
                 toast.error("Please enter a valid price greater than zero");
                 form.setError("salePrice", { 
@@ -1538,7 +1604,7 @@ export function SalesFormDialog({
             }
 
             // Get discount and tax values with validation
-            const discount = safeParseFloat(form.watch("itemDiscount"));
+            const discount = safeParseFloat(form.watch("itemDiscount") || "0");
             if (discount < 0) {
                 toast.error("Discount cannot be negative");
                 form.setError("itemDiscount", { 
@@ -1548,18 +1614,7 @@ export function SalesFormDialog({
                 return;
             }
 
-            // Validate discount doesn't exceed base amount
-            const baseAmount = quantity * price;
-            if (discount > baseAmount) {
-                toast.error("Discount cannot exceed the item base amount");
-                form.setError("itemDiscount", {
-                    type: "manual",
-                    message: `Maximum discount: ${baseAmount}`
-                });
-                return;
-            }
-
-            const tax = safeParseFloat(form.watch("itemTax"));
+            const tax = safeParseFloat(form.watch("itemTax") || "0");
             if (tax < 0) {
                 toast.error("Tax cannot be negative");
                 form.setError("itemTax", { 
@@ -1569,12 +1624,28 @@ export function SalesFormDialog({
                 return;
             }
 
-            // Calculate final subtotal with proper math and precision
+            // Calculate final subtotal with precise math
+            // First calculate the base amount
+            const baseAmount = quantity * price;
+            
+            // Validate discount doesn't exceed base amount
+            if (discount > baseAmount) {
+                toast.error("Discount cannot exceed the item base amount");
+                form.setError("itemDiscount", {
+                    type: "manual",
+                    message: `Maximum discount: ${formatCurrency(baseAmount)}`
+                });
+                return;
+            }
+
+            // Calculate the amount after discount
             const afterDiscount = Math.max(0, baseAmount - discount);
+            
+            // Add tax to get final subtotal
             const subtotal = afterDiscount + tax;
             
-            // Use toFixed for consistent decimal places, then convert back to number
-            const finalSubtotal = parseFloat((Math.round(subtotal * 100) / 100).toFixed(2));
+            // Round to 2 decimal places for consistency
+            const finalSubtotal = parseFloat((Math.round((subtotal + Number.EPSILON) * 100) / 100).toFixed(2));
 
             // Create the cart item with properly calculated values
             const newItem: CartItem = {
@@ -1617,12 +1688,88 @@ export function SalesFormDialog({
         }
     };
 
-    // Function to remove item from cart
+    // Function to remove item from cart with better state handling
     const removeItemFromCart = (index: number) => {
-        setCartItems(prevItems => prevItems.filter((_, i) => i !== index));
-        toast.success("Item removed from cart");
-        // Recalculate totals after removing item
-        calculateOrderTotals();
+        // Get the item being removed for the toast message
+        const itemToRemove = cartItems[index];
+        
+        // Create a new array without the removed item
+        const updatedCartItems = cartItems.filter((_, i) => i !== index);
+        
+        // Update the cart items state
+        setCartItems(updatedCartItems);
+        
+        // Show success message with the product name
+        toast.success(`Removed ${itemToRemove?.name || 'item'} from cart`);
+        
+        // If cart is now empty, reset the total
+        if (updatedCartItems.length === 0) {
+            setCalculatedTotal(0);
+            form.setValue("totalSale", 0);
+            
+            // Also reset payment fields if cart is empty
+            if (form.getValues("paymentStatus") === "PAID" || form.getValues("paymentStatus") === "PARTIAL") {
+                form.setValue("paymentAmount", "0");
+            }
+        } else {
+            // Recalculate totals after removing item
+            calculateOrderTotals();
+        }
+    };
+
+    // Function to edit an item in the cart
+    const editCartItem = (index: number) => {
+        const itemToEdit = cartItems[index];
+        if (!itemToEdit) return;
+        
+        // Find the product type in options
+        const productList = itemToEdit.productType === "THREAD" 
+            ? productOptions.thread 
+            : productOptions.fabric;
+            
+        // Find the product in the list
+        const productToEdit = productList.find(p => p.id === itemToEdit.productId);
+        
+        if (productToEdit) {
+            // Set form values from the cart item
+            form.setValue("productType", itemToEdit.productType);
+            form.setValue("productId", itemToEdit.productId.toString());
+            form.setValue("quantitySold", itemToEdit.quantity.toString());
+            form.setValue("salePrice", itemToEdit.unitPrice.toString());
+            form.setValue("itemDiscount", itemToEdit.discount.toString());
+            form.setValue("itemTax", itemToEdit.tax.toString());
+            
+            // Set inventory ID if available
+            if (itemToEdit.inventoryItemId) {
+                form.setValue("inventoryItemId", itemToEdit.inventoryItemId.toString());
+            }
+            
+            // Set source product ID based on type
+            if (itemToEdit.productType === "THREAD" && itemToEdit.threadPurchaseId) {
+                form.setValue("sourceProductId", itemToEdit.threadPurchaseId.toString());
+            } else if (itemToEdit.productType === "FABRIC" && itemToEdit.fabricProductionId) {
+                form.setValue("sourceProductId", itemToEdit.fabricProductionId.toString());
+            }
+            
+            // Set the selected product
+            setSelectedProduct(productToEdit);
+            
+            // Update the current item subtotal
+            setCurrentItemSubtotal(itemToEdit.subtotal);
+            
+            // Remove the item from cart
+            removeItemFromCart(index);
+            
+            // Scroll to the product selection area
+            document.querySelector(".rounded-lg.border.bg-muted\\/20.p-3")?.scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'center'
+            });
+            
+            toast.info(`Editing ${itemToEdit.name} - make changes and add to cart again`);
+        } else {
+            toast.error("Could not find product details for editing");
+        }
     };
 
     return (
@@ -1739,12 +1886,23 @@ export function SalesFormDialog({
                                         </thead>
                                         <tbody>
                                             {cartItems.map((item, index) => (
-                                                <tr key={index} className="border-b">
+                                                <tr key={index} className={index % 2 === 0 ? "bg-muted/10" : ""}>
                                                     <td className="px-3 py-2">
                                                         <div>
                                                             <div className="font-medium">{item.name}</div>
-                                                            <div className="text-xs text-muted-foreground">
-                                                                {item.productType}
+                                                            <div className="mt-1 flex items-center">
+                                                                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                                                                    item.productType === 'THREAD' 
+                                                                        ? 'bg-blue-100 text-blue-800' 
+                                                                        : 'bg-green-100 text-green-800'
+                                                                }`}>
+                                                                    {item.productType}
+                                                                </span>
+                                                                {item.inventoryItemId && (
+                                                                    <span className="ml-1 text-xs text-muted-foreground">
+                                                                        (Inventory Item)
+                                                                    </span>
+                                                                )}
                                                             </div>
                                                         </div>
                                                     </td>
@@ -1762,21 +1920,44 @@ export function SalesFormDialog({
                                                         {formatCurrency(item.subtotal)}
                                                     </td>
                                                     <td className="px-3 py-2 text-center">
-                                                        <Button
-                                                            type="button"
-                                                            variant="ghost"
-                                                            size="sm"
-                                                            onClick={() => removeItemFromCart(index)}
-                                                        >
-                                                            <Trash2 className="h-4 w-4 text-red-500" />
-                                                        </Button>
+                                                        <div className="flex justify-center gap-1">
+                                                            <Button
+                                                                type="button"
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                onClick={() => editCartItem(index)}
+                                                                title="Edit item"
+                                                            >
+                                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-500">
+                                                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                                                </svg>
+                                                                <span className="sr-only">Edit item</span>
+                                                            </Button>
+                                                            <Button
+                                                                type="button"
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                onClick={() => removeItemFromCart(index)}
+                                                                title="Remove item"
+                                                            >
+                                                                <Trash2 className="h-4 w-4 text-red-500" />
+                                                                <span className="sr-only">Remove item</span>
+                                                            </Button>
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             ))}
                                         </tbody>
                                         <tfoot className="bg-muted/30">
                                             <tr>
-                                                <td colSpan={5} className="px-3 py-2 text-right font-medium">
+                                                <td className="px-3 py-2 text-left font-medium">
+                                                    Total ({cartItems.length} {cartItems.length === 1 ? 'item' : 'items'})
+                                                </td>
+                                                <td className="px-3 py-2 text-center font-medium">
+                                                    {cartItems.reduce((sum, item) => sum + item.quantity, 0)}
+                                                </td>
+                                                <td colSpan={3} className="px-3 py-2 text-right font-medium">
                                                     Items Subtotal:
                                                 </td>
                                                 <td className="px-3 py-2 text-right font-medium">
@@ -1784,6 +1965,25 @@ export function SalesFormDialog({
                                                 </td>
                                                 <td></td>
                                             </tr>
+                                            {cartItems.filter(item => item.productType === 'THREAD').length > 0 && 
+                                            cartItems.filter(item => item.productType === 'FABRIC').length > 0 && (
+                                                <tr className="text-xs text-muted-foreground">
+                                                    <td colSpan={2} className="px-3 py-1 border-t">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-800">THREAD</span>
+                                                            {cartItems.filter(item => item.productType === 'THREAD').length} items, 
+                                                            {cartItems.filter(item => item.productType === 'THREAD').reduce((sum, item) => sum + item.quantity, 0)} units
+                                                        </div>
+                                                    </td>
+                                                    <td colSpan={5} className="px-3 py-1 border-t text-right">
+                                                        <div className="flex items-center gap-2 justify-end">
+                                                            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-800">FABRIC</span>
+                                                            {cartItems.filter(item => item.productType === 'FABRIC').length} items,
+                                                            {cartItems.filter(item => item.productType === 'FABRIC').reduce((sum, item) => sum + item.quantity, 0)} units
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )}
                                         </tfoot>
                                     </table>
                                 </div>

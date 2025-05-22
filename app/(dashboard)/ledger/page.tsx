@@ -181,55 +181,58 @@ function ClientLedger() {
               params.append("endDate", date.to.toISOString());
             }
             
-            // Add cache-busting timestamp parameter
-            params.append("_t", Date.now().toString());
+            // Add cache-busting timestamp parameter but only for timestamp tracking
+            params.append("refreshAt", Date.now().toString());
             
             // Construct the URL with the search params
             const url = `/api/ledger?${params.toString()}`;
             
             console.log(`[Ledger] Auto-refresh with params: ${params.toString()}`);
             const response = await fetch(url, {
-              // Disable caching to always get fresh data
-              cache: 'no-store',
+              // Use a custom header that won't trigger unnecessary revalidation
               headers: {
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0'
-              }
+                'X-Refresh-Only': 'true',
+              },
+              // Use no-cache to get fresh data but without aggressive invalidation
+              cache: 'no-cache'
             });
             
             if (response.ok) {
               const data = await response.json();
               if (data.entries && Array.isArray(data.entries)) {
-                setEntries(data.entries || []);
-                if (data.summary) {
-                  setStats({
-                    // Update stats from the response
-                    totalBills: data.summary.billsTotal || 0,
-                    // ...other stats
-                    totalPendingBills: (data.summary.billsTotal || 0) - (data.summary.paidBills || 0),
-                    totalTransactions: data.summary.transactionsTotal || 0,
-                    totalCheques: data.summary.chequesTotal || 0,
-                    totalPendingCheques: data.summary.pendingCheques || 0,
-                    totalInventory: data.summary.inventoryItems || 0,
-                    totalReceivables: data.summary.totalReceivables || 0,
-                    totalPayables: data.summary.totalPayables || 0,
-                    totalBankBalance: data.summary.totalBankBalance || 0,
-                    totalOverdueCount: data.summary.overdueBills || 0,
-                    totalOverdueAmount: data.summary.overdueAmount || 0,
-                    totalInventoryValue: data.summary.totalInventoryValue || 0,
-                    billsTotal: data.summary.billsTotal || 0,
-                    paidBills: data.summary.paidBills || 0,
-                    pendingCheques: data.summary.pendingCheques || 0,
-                    inventoryItems: data.summary.inventoryItems || 0,
-                    bankAccounts: data.summary.bankAccounts || 0,
-                    totalCashInHand: data.summary.totalCashInHand || 0,
-                    totalRecentTransactions: data.summary.totalRecentTransactions || 0
-                  });
+                // Compare data with existing entries using IDs and timestamps
+                // Only update if there are actual changes
+                const hasChanges = checkForDataChanges(entries, data.entries);
+                
+                if (hasChanges) {
+                  setEntries(data.entries || []);
+                  if (data.summary) {
+                    setStats({
+                      totalBills: data.summary.billsTotal || 0,
+                      totalPendingBills: (data.summary.billsTotal || 0) - (data.summary.paidBills || 0),
+                      totalTransactions: data.summary.transactionsTotal || 0,
+                      totalCheques: data.summary.chequesTotal || 0,
+                      totalPendingCheques: data.summary.pendingCheques || 0,
+                      totalInventory: data.summary.inventoryItems || 0,
+                      totalReceivables: data.summary.totalReceivables || 0,
+                      totalPayables: data.summary.totalPayables || 0,
+                      totalBankBalance: data.summary.totalBankBalance || 0,
+                      totalOverdueCount: data.summary.overdueBills || 0,
+                      totalOverdueAmount: data.summary.overdueAmount || 0,
+                      totalInventoryValue: data.summary.totalInventoryValue || 0,
+                      billsTotal: data.summary.billsTotal || 0,
+                      paidBills: data.summary.paidBills || 0,
+                      pendingCheques: data.summary.pendingCheques || 0,
+                      inventoryItems: data.summary.inventoryItems || 0,
+                      bankAccounts: data.summary.bankAccounts || 0,
+                      totalCashInHand: data.summary.totalCashInHand || 0,
+                      totalRecentTransactions: data.summary.totalRecentTransactions || 0
+                    });
+                  }
+                  // Only update last refreshed timestamp if data actually changed
+                  setLastRefreshed(new Date());
                 }
               }
-              // Update last refreshed timestamp
-              setLastRefreshed(new Date());
             }
           } catch (error) {
             console.error("[Ledger] Auto-refresh error:", error);
@@ -239,7 +242,7 @@ function ClientLedger() {
         
         // Execute the quiet refresh
         quietRefresh();
-      }, 30000); // 30 seconds
+      }, 60000); // Increase to 60 seconds to reduce unnecessary refreshes
     }
     
     return () => {
@@ -247,8 +250,33 @@ function ClientLedger() {
         clearInterval(refreshTimer);
       }
     };
-  }, [autoRefresh, tab, khataId, date]);
-  
+  }, [autoRefresh, tab, khataId, date, entries]);
+
+  // Helper function to check if data has actually changed
+  const checkForDataChanges = (oldEntries: LedgerEntryRow[], newEntries: LedgerEntryRow[]): boolean => {
+    // Quick checks for obvious changes
+    if (oldEntries.length !== newEntries.length) return true;
+    
+    // Create maps for faster lookups
+    const oldEntriesMap = new Map(oldEntries.map(entry => [entry.id, entry]));
+    
+    // Check if any entry has changed
+    for (const newEntry of newEntries) {
+      const oldEntry = oldEntriesMap.get(newEntry.id);
+      
+      // Entry is new or key fields have changed
+      if (!oldEntry || 
+          oldEntry.status !== newEntry.status ||
+          oldEntry.amount !== newEntry.amount ||
+          oldEntry.remainingAmount !== newEntry.remainingAmount) {
+        return true;
+      }
+    }
+    
+    // No changes detected
+    return false;
+  };
+
   // Show a toast notification when auto-refresh is toggled
   useEffect(() => {
     if (autoRefresh) {
@@ -296,22 +324,21 @@ function ClientLedger() {
       params.append("orderBy", "entryDate");
       params.append("order", "desc");
       
-      // Add cache-busting timestamp parameter
-      params.append("_t", Date.now().toString());
+      // Add request ID for tracking only
+      const requestId = Date.now().toString();
+      params.append("requestId", requestId);
       
       // Construct the URL with the search params
       const url = `/api/ledger?${params.toString()}`;
       
       console.log(`[Ledger] Fetching data with params: ${params.toString()}`);
       const response = await fetch(url, {
-        // Disable caching to always get fresh data
-        cache: 'no-store',
+        // Use better caching strategy
+        cache: 'no-cache',
         headers: {
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0'
+          // Add a cache buster in headers rather than URL to avoid server-side caching
+          'X-Request-Id': requestId
         },
-        next: { revalidate: 0 } // Don't revalidate cache - always fetch fresh data
       });
       
       if (!response.ok) {
@@ -363,6 +390,9 @@ function ClientLedger() {
       }
       
       const data = await response.json();
+      
+      // Update last refreshed timestamp immediately upon successful data fetch
+      setLastRefreshed(new Date());
       setEntries(data.entries || []);
       
       // If the API returns summary statistics, use them instead of calculating client-side
@@ -524,8 +554,9 @@ function ClientLedger() {
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     
     entries.forEach(entry => {
-      const amount = parseFloat(entry.remainingAmount || "0");
-      const totalAmount = parseFloat(entry.amount || "0");
+      // Parse amounts safely with fixed precision
+      const amount = parseFloat(parseFloat(entry.remainingAmount || "0").toFixed(2));
+      const totalAmount = parseFloat(parseFloat(entry.amount || "0").toFixed(2));
       
       // PAYABLE and RECEIVABLE entries
       if (entry.entryType === "PAYABLE") {
@@ -556,7 +587,7 @@ function ClientLedger() {
         if (entry.dueDate && new Date(entry.dueDate) < today && 
             entry.status !== "COMPLETED" && entry.status !== "CANCELLED") {
           stats.totalOverdueCount++;
-          stats.totalOverdueAmount += amount;
+          stats.totalOverdueAmount = parseFloat((stats.totalOverdueAmount + amount).toFixed(2));
         }
       }
       else if (entry.entryType === "TRANSACTION") {
@@ -569,9 +600,9 @@ function ClientLedger() {
         
         // Calculate cash in hand from transactions
         if (entry.transactionType === "CASH_RECEIPT") {
-          stats.totalCashInHand += totalAmount;
+          stats.totalCashInHand = parseFloat((stats.totalCashInHand + totalAmount).toFixed(2));
         } else if (entry.transactionType === "CASH_PAYMENT") {
-          stats.totalCashInHand -= totalAmount;
+          stats.totalCashInHand = parseFloat((stats.totalCashInHand - totalAmount).toFixed(2));
         }
       }
       else if (entry.entryType === "CHEQUE") {
@@ -584,11 +615,28 @@ function ClientLedger() {
       else if (entry.entryType === "INVENTORY") {
         stats.totalInventory++;
         stats.inventoryItems++;
-        stats.totalInventoryValue += parseFloat(entry.amount || "0");
+        stats.totalInventoryValue = parseFloat((stats.totalInventoryValue + totalAmount).toFixed(2));
       }
       else if (entry.entryType === "BANK") {
         stats.bankAccounts++;
-        stats.totalBankBalance += parseFloat(entry.amount || "0");
+        stats.totalBankBalance = parseFloat((stats.totalBankBalance + totalAmount).toFixed(2));
+      }
+    });
+    
+    // Ensure non-negative values and proper precision
+    Object.keys(stats).forEach(key => {
+      const stat = stats[key as keyof typeof stats];
+      if (typeof stat === 'number') {
+        // Ensure non-negative values
+        stats[key as keyof typeof stats] = Math.max(0, stat);
+        
+        // Fix precision for monetary values
+        if (key.startsWith('total') && 
+            !['totalRecentTransactions', 'totalBills', 'totalPendingBills', 
+              'totalTransactions', 'totalCheques', 'totalPendingCheques', 
+              'totalInventory', 'totalOverdueCount'].includes(key)) {
+          stats[key as keyof typeof stats] = parseFloat(stat.toFixed(2));
+        }
       }
     });
     
@@ -659,24 +707,26 @@ function ClientLedger() {
             </Button>
           </div>
           
+          {/* Add a more visible manual refresh button */}
+          <Button 
+            variant="secondary" 
+            size="sm" 
+            onClick={fetchLedgerEntries}
+            disabled={isLoading}
+            className="gap-1"
+          >
+            {isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCcw className="h-4 w-4" />
+            )}
+            Refresh Now
+          </Button>
+          
           <Button asChild>
             <Link href="/ledger/new?type=bill">
               <FileText className="mr-2 h-4 w-4" />
               New Bill
-            </Link>
-          </Button>
-          
-          <Button asChild variant="outline">
-            <Link href="/ledger/new?type=transaction">
-              <ArrowDownUp className="mr-2 h-4 w-4" />
-              New Transaction
-            </Link>
-          </Button>
-
-          <Button asChild variant="outline">
-            <Link href="/ledger/new?type=bank">
-              <Building className="mr-2 h-4 w-4" />
-              Bank Account
             </Link>
           </Button>
         </div>

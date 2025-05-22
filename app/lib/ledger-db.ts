@@ -52,7 +52,7 @@ const ledgerDbUrl = process.env.LEDGER_DATABASE_URL || process.env.DATABASE_URL;
 const hasLedgerConfig = !!ledgerDbUrl;
 
 // TEMPORARILY FORCE MOCK DATA FOR TESTING
-const useMockDataForTesting = true; // TEMPORARILY CHANGED TO TRUE DUE TO CONNECTION ISSUES // Changed to false to use real database
+const useMockDataForTesting = false; // Use real database connection instead of mock data
 
 // Use these enum values when needed for the application
 /**

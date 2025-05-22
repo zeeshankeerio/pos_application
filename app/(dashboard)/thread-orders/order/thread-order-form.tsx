@@ -810,7 +810,7 @@ export function ThreadOrderForm({
                                     </div>
 
                                     {/* Order Summary */}
-                                    <div className="border-[var(--border)] rounded-md border p-5">
+                                    <div className="border-border rounded-md border p-5">
                                         <h3 className="mb-3 text-lg font-medium">
                                             Order Summary
                                         </h3>
@@ -1010,7 +1010,7 @@ export function ThreadOrderForm({
                                                     <FormLabel className="flex items-center gap-1">
                                                         Thread Color
                                                         <div
-                                                            className="border-[var(--border)] h-4 w-4 rounded-full border shadow-sm"
+                                                            className="border-border h-4 w-4 rounded-full border shadow-sm"
                                                             style={{
                                                                 backgroundColor:
                                                                     watchedColor ||
@@ -1265,7 +1265,7 @@ export function ThreadOrderForm({
                                         />
                                     </div>
 
-                                    <div className="border-[var(--border)] rounded-md border p-5">
+                                    <div className="border-border rounded-md border p-5">
                                         <div className="text-muted-foreground flex items-center gap-2 text-sm">
                                             <InfoIcon className="h-4 w-4" />
                                             <p>

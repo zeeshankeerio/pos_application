@@ -56,6 +56,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SalesOrderItem } from "./columns";
 import { downloadInvoice } from "./handleDownloadInvoice";
 
+// Define a type for the items in a sale
+type SaleItem = NonNullable<SalesOrderItem['items']>[number];
+
 // Helper function to format currency
 const formatCurrency = (amount: number | undefined) => {
     if (amount === undefined) return "-";
@@ -618,70 +621,104 @@ export function SalesDetailsDialog() {
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                <tr className="border-t">
+                                                {/* Check if sales has items array and map through them */}
+                                                {(sale.items?.length ?? 0) > 0 ? (
+                                                    sale.items?.map((item: SaleItem, index: number) => (
+                                                        <tr key={item.id || index} className={index > 0 ? "border-t" : ""}>
+                                                            <td className="p-4">
+                                                                <div>
+                                                                    <p className="font-medium">
+                                                                        {item.productName || `#${item.productId}`}
+                                                                    </p>
+                                                                    <p className="text-muted-foreground text-sm">
+                                                                        {item.productType}
+                                                                    </p>
+
+                                                                    {/* Show additional product details based on type */}
+                                                                    {item.productType === ProductType.THREAD &&
+                                                                        item.threadPurchase && (
+                                                                            <div className="text-muted-foreground mt-1 text-xs">
+                                                                                <p>
+                                                                                    Thread Type:{" "}
+                                                                                    {item.threadPurchase.threadType}
+                                                                                </p>
+                                                                                {item.threadPurchase.color && (
+                                                                                    <p>
+                                                                                        Color:{" "}
+                                                                                        {item.threadPurchase.color}
+                                                                                    </p>
+                                                                                )}
+                                                                            </div>
+                                                                        )}
+
+                                                                    {item.productType === ProductType.FABRIC &&
+                                                                        item.fabricProduction && (
+                                                                            <div className="text-muted-foreground mt-1 text-xs">
+                                                                                <p>
+                                                                                    Fabric Type:{" "}
+                                                                                    {item.fabricProduction.fabricType}
+                                                                                </p>
+                                                                                {item.fabricProduction.dimensions && (
+                                                                                    <p>
+                                                                                        Dimensions:{" "}
+                                                                                        {item.fabricProduction.dimensions}
+                                                                                    </p>
+                                                                                )}
+                                                                            </div>
+                                                                        )}
+                                                                </div>
+                                                            </td>
+                                                            <td className="p-4 text-center">
+                                                                {item.quantitySold}
+                                                            </td>
+                                                            <td className="p-4 text-right">
+                                                                {formatCurrency(item.unitPrice)}
+                                                            </td>
+                                                            <td className="p-4 text-right font-medium">
+                                                                {formatCurrency(item.unitPrice * item.quantitySold)}
+                                                            </td>
+                                                        </tr>
+                                                    ))
+                                                ) : (
+                                                    // Fallback to legacy structure if no items array
+                                                    <tr>
                                                     <td className="p-4">
                                                         <div>
                                                             <p className="font-medium">
                                                                 {getProductName()}
                                                             </p>
                                                             <p className="text-muted-foreground text-sm">
-                                                                {
-                                                                    sale.productType
-                                                                }
+                                                                    {sale.productType}
                                                             </p>
 
                                                             {/* Show additional product details based on type */}
-                                                            {sale.productType ===
-                                                                ProductType.THREAD &&
+                                                                {sale.productType === ProductType.THREAD &&
                                                                 sale.threadPurchase && (
                                                                     <div className="text-muted-foreground mt-1 text-xs">
                                                                         <p>
-                                                                            Thread
-                                                                            Type:{" "}
-                                                                            {
-                                                                                sale
-                                                                                    .threadPurchase
-                                                                                    .threadType
-                                                                            }
-                                                                        </p>
-                                                                        {sale
-                                                                            .threadPurchase
-                                                                            .color && (
+                                                                                Thread Type:{" "}
+                                                                                {sale.threadPurchase.threadType}
+                                                                            </p>
+                                                                            {sale.threadPurchase.color && (
                                                                             <p>
                                                                                 Color:{" "}
-                                                                                {
-                                                                                    sale
-                                                                                        .threadPurchase
-                                                                                        .color
-                                                                                }
+                                                                                    {sale.threadPurchase.color}
                                                                             </p>
                                                                         )}
                                                                     </div>
                                                                 )}
 
-                                                            {sale.productType ===
-                                                                ProductType.FABRIC &&
+                                                                {sale.productType === ProductType.FABRIC &&
                                                                 sale.fabricProduction && (
                                                                     <div className="text-muted-foreground mt-1 text-xs">
                                                                         <p>
-                                                                            Fabric
-                                                                            Type:{" "}
-                                                                            {
-                                                                                sale
-                                                                                    .fabricProduction
-                                                                                    .fabricType
-                                                                            }
-                                                                        </p>
-                                                                        {sale
-                                                                            .fabricProduction
-                                                                            .dimensions && (
+                                                                                Fabric Type:{" "}
+                                                                                {sale.fabricProduction.fabricType}
+                                                                            </p>
+                                                                            {sale.fabricProduction.dimensions && (
                                                                             <p>
                                                                                 Dimensions:{" "}
-                                                                                {
-                                                                                    sale
-                                                                                        .fabricProduction
-                                                                                        .dimensions
-                                                                                }
+                                                                                    {sale.fabricProduction.dimensions}
                                                                             </p>
                                                                         )}
                                                                     </div>
@@ -692,23 +729,16 @@ export function SalesDetailsDialog() {
                                                         {sale.quantitySold}
                                                     </td>
                                                     <td className="p-4 text-right">
-                                                        {formatCurrency(
-                                                            sale.unitPrice,
-                                                        )}
+                                                            {formatCurrency(sale.unitPrice)}
                                                     </td>
                                                     <td className="p-4 text-right font-medium">
-                                                        {formatCurrency(
-                                                            sale.unitPrice *
-                                                                sale.quantitySold,
-                                                        )}
+                                                            {formatCurrency(sale.unitPrice * sale.quantitySold)}
                                                     </td>
                                                 </tr>
+                                                )}
                                                 {sale.remarks && (
                                                     <tr className="bg-muted/5 border-t">
-                                                        <td
-                                                            colSpan={4}
-                                                            className="p-4"
-                                                        >
+                                                        <td colSpan={4} className="p-4">
                                                             <p className="text-muted-foreground text-sm">
                                                                 <span className="font-medium">
                                                                     Note:
@@ -731,14 +761,16 @@ export function SalesDetailsDialog() {
                                             <span>PAYMENT SUMMARY</span>
                                         </h3>
                                         <div className="space-y-3">
+                                            {/* Calculate subtotal from all items */}
                                             <div className="flex justify-between">
                                                 <span className="text-muted-foreground">
                                                     Subtotal:
                                                 </span>
                                                 <span>
                                                     {formatCurrency(
-                                                        sale.unitPrice *
-                                                            sale.quantitySold,
+                                                        (sale.items?.length ?? 0) > 0
+                                                            ? sale.items?.reduce((sum: number, item: SaleItem) => sum + (item.unitPrice * item.quantitySold), 0) ?? 0
+                                                            : sale.unitPrice * sale.quantitySold
                                                     )}
                                                 </span>
                                             </div>
@@ -752,7 +784,7 @@ export function SalesDetailsDialog() {
                                                         <span className="text-green-600">
                                                             -{" "}
                                                             {formatCurrency(
-                                                                sale.discount,
+                                                                sale.discount
                                                             )}
                                                         </span>
                                                     </div>
@@ -765,7 +797,7 @@ export function SalesDetailsDialog() {
                                                     </span>
                                                     <span>
                                                         {formatCurrency(
-                                                            sale.tax,
+                                                            sale.tax
                                                         )}
                                                     </span>
                                                 </div>
@@ -776,9 +808,7 @@ export function SalesDetailsDialog() {
                                             <div className="flex justify-between text-lg font-medium">
                                                 <span>Total:</span>
                                                 <span>
-                                                    {formatCurrency(
-                                                        sale.totalSale,
-                                                    )}
+                                                    {formatCurrency(sale.totalSale)}
                                                 </span>
                                             </div>
 

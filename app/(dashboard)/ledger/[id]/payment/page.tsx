@@ -42,7 +42,29 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatCurrency } from "../../columns";
-import { LedgerEntryRow, LedgerEntryType, LedgerEntryStatus } from "@/app/lib/types";
+import { LedgerEntryRow, UiLedgerEntryType, UiLedgerEntryStatus } from "@/app/lib/types";
+
+// Extended type for LedgerEntryRow with our runtime-added properties
+interface ExtendedLedgerEntryRow extends LedgerEntryRow {
+  displayEntryType?: string;
+}
+
+// Helper function to get the display entry type based on entry data
+function getDisplayEntryType(entry: ExtendedLedgerEntryRow): string {
+  if (entry.displayEntryType) {
+    return entry.displayEntryType;
+  }
+  
+  if (entry.entryType === "BILL") {
+    if (entry.transactionType === "SALE") {
+      return "RECEIVABLE";
+    } else if (entry.transactionType === "PURCHASE") {
+      return "PAYABLE";
+    }
+  }
+  
+  return entry.entryType;
+}
 
 // Payment/Receipt form schema
 const formSchema = z.object({
@@ -77,7 +99,7 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>;
 
 interface TransactionData {
-  ledgerEntryId: number;
+  ledgerEntryId: string | number;
   amount: string;
   transactionDate: string;
   paymentMode: "CASH" | "CHEQUE" | "ONLINE";
@@ -92,7 +114,7 @@ export default function PaymentFormPage() {
   const params = useParams();
   const id = params?.id as string;
   
-  const [entry, setEntry] = useState<LedgerEntryRow | null>(null);
+  const [entry, setEntry] = useState<ExtendedLedgerEntryRow | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [maxAmount, setMaxAmount] = useState<number>(0);
@@ -120,7 +142,18 @@ export default function PaymentFormPage() {
     
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/ledger/${id}`);
+      // Add timestamp to URL for cache-busting
+      const timestamp = new Date().getTime();
+      const response = await fetch(`/api/ledger/${id}?_=${timestamp}`, {
+        method: "GET",
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        },
+        cache: "no-store",
+        next: { revalidate: 0 }
+      });
       
       if (!response.ok) {
         if (response.status === 404) {
@@ -132,10 +165,53 @@ export default function PaymentFormPage() {
       }
       
       const data = await response.json();
-      setEntry(data.entry);
+      const entryData = data.entry;
+      
+      console.log('Loaded entry data for payment:', {
+        id: entryData.id,
+        amount: entryData.amount,
+        remainingAmount: entryData.remainingAmount,
+        status: entryData.status,
+        entryType: entryData.entryType,
+        transactionType: entryData.transactionType
+      });
+      
+      // Normalize entry type to match what's shown in the list view
+      if (entryData.entryType === "BILL") {
+        if (entryData.transactionType === "SALE") {
+          entryData.displayEntryType = "RECEIVABLE";
+        } else if (entryData.transactionType === "PURCHASE") {
+          entryData.displayEntryType = "PAYABLE";
+        } else {
+          entryData.displayEntryType = entryData.entryType;
+        }
+      } else {
+        entryData.displayEntryType = entryData.entryType;
+      }
+      
+      // Validate amount and remaining amount data
+      if (entryData.amount && entryData.remainingAmount) {
+        // Parse values ensuring they're proper numbers
+        const amount = parseFloat(typeof entryData.amount === 'string' ? entryData.amount : entryData.amount.toString());
+        const remainingAmount = parseFloat(typeof entryData.remainingAmount === 'string' ? entryData.remainingAmount : entryData.remainingAmount.toString());
+        
+        // Fix remaining amount if it's greater than the total amount (shouldn't happen)
+        if (remainingAmount > amount + 0.005) {
+          console.warn(`Data inconsistency: Remaining amount (${remainingAmount}) greater than total (${amount}). Fixing...`);
+          entryData.remainingAmount = entryData.amount;
+        }
+        
+        // Fix status if it shows PAID but has remaining balance
+        if ((entryData.status === "PAID" || entryData.status === "COMPLETED") && remainingAmount > 0.005) {
+          console.warn(`Data inconsistency: Entry marked as ${entryData.status} but has remaining balance of ${remainingAmount}. Fixing status...`);
+          entryData.status = remainingAmount < amount ? "PARTIAL" : "PENDING";
+        }
+      }
+      
+      setEntry(entryData);
       
       // Set max amount to remaining amount
-      const remainingAmount = parseFloat(data.entry.remainingAmount);
+      const remainingAmount = parseFloat(entryData.remainingAmount);
       setMaxAmount(remainingAmount);
       
       // Pre-fill amount with remaining balance
@@ -155,24 +231,32 @@ export default function PaymentFormPage() {
     setIsSubmitting(true);
     
     try {
+      // Parse amount with precision handling
+      const inputAmount = data.amount;
+      const amount = parseFloat(parseFloat(inputAmount).toFixed(2));
+      
       // Validate amount doesn't exceed remaining amount
-      const amount = parseFloat(data.amount);
-      if (amount > maxAmount) {
-        toast.error(`Amount cannot exceed the remaining balance of ${formatCurrency(maxAmount)}`);
+      // Use a small tolerance to account for potential floating point issues
+      if (amount > maxAmount + 0.005) {
+        form.setError("amount", { 
+          type: "manual", 
+          message: `Amount cannot exceed the remaining balance of ${formatCurrency(maxAmount)}`
+        });
         setIsSubmitting(false);
         return;
       }
       
+      // Get entry ID, handling composite IDs like "bill:123"
+      const ledgerEntryId = entry.id;
+
       // Prepare the data for submission
       const transactionData: TransactionData = {
-        ledgerEntryId: typeof entry.id === 'string' ? parseInt(entry.id) : entry.id as number,
-        amount: data.amount,
+        ledgerEntryId: ledgerEntryId,
+        amount: amount.toFixed(2), // Ensure consistent decimal precision
         transactionDate: data.transactionDate.toISOString(),
         paymentMode: data.paymentMode,
         notes: data.notes,
-        referenceNumber: data.referenceNumber,
-        chequeNumber: undefined,
-        bankName: undefined
+        referenceNumber: data.referenceNumber
       };
       
       // Add cheque details if payment mode is CHEQUE
@@ -181,32 +265,61 @@ export default function PaymentFormPage() {
         transactionData.bankName = data.bankName;
       }
       
-      // Submit the payment/receipt
-      const response = await fetch(`/api/ledger/transactions`, {
+      // Submit the payment/receipt with cache busting to prevent stale data
+      const timestamp = Date.now().toString();
+      const response = await fetch(`/api/ledger/transactions?_=${timestamp}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // Add cache-busting headers
+          "Cache-Control": "no-cache, no-store, must-revalidate",
+          "Pragma": "no-cache",
+          "Expires": "0",
+          "X-Cache-Bust": timestamp
         },
         body: JSON.stringify(transactionData),
+        next: { revalidate: 0 } // Force revalidation in Next.js
       });
       
       if (!response.ok) {
         const errorData = await response.json();
+        console.error("Payment error:", errorData);
         throw new Error(errorData.error || "Failed to record payment");
       }
       
-      // Show success message
-      toast.success(`${entry.entryType === "PAYABLE" ? "Payment" : "Receipt"} recorded successfully`);
+      // Get the response data
+      const responseData = await response.json();
       
-      // Navigate back to the entry detail page
-      router.push(`/ledger/${entry.id}`);
-    } catch (error) {
-      console.error("Error recording payment:", error);
-      if (error instanceof Error) {
-        toast.error(error.message);
-      } else {
-        toast.error("Failed to record payment");
+      // Show success message
+      const isPayable = getDisplayEntryType(entry) === "PAYABLE";
+      
+      toast.success(`${isPayable ? "Payment" : "Receipt"} recorded successfully`);
+      
+      // Invalidate any cached data for this ledger entry and the ledger list
+      try {
+        await fetch(`/api/revalidate?path=/ledger/${entry.id}&path=/ledger`, { 
+          method: "GET",
+          cache: "no-store",
+          headers: {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+          }
+        });
+      } catch (e) {
+        console.warn("Cache invalidation failed:", e);
       }
+      
+      // Redirect back to the ledger entry page
+      router.push(`/ledger/${entry.id}`);
+      
+      // Force a hard reload to ensure the ledger entry page shows the updated data
+      setTimeout(() => {
+        window.location.href = `/ledger/${entry.id}?_=${Date.now()}`;
+      }, 300);
+    } catch (error: any) {
+      console.error("Error recording payment:", error);
+      toast.error(error.message || "Failed to record payment");
       setIsSubmitting(false);
     }
   };
@@ -304,7 +417,7 @@ export default function PaymentFormPage() {
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <h1 className="text-2xl font-semibold tracking-tight">
-            {entry.entryType === "PAYABLE" ? "Record Payment" : "Record Receipt"}
+            {getDisplayEntryType(entry) === "PAYABLE" ? "Record Payment" : "Record Receipt"}
           </h1>
         </div>
       </div>
@@ -515,10 +628,10 @@ export default function PaymentFormPage() {
                   {isSubmitting ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {entry.entryType === "PAYABLE" ? "Making Payment..." : "Recording Receipt..."}
+                      {getDisplayEntryType(entry) === "PAYABLE" ? "Making Payment..." : "Recording Receipt..."}
                     </>
                   ) : (
-                    entry.entryType === "PAYABLE" ? "Make Payment" : "Record Receipt"
+                    getDisplayEntryType(entry) === "PAYABLE" ? "Make Payment" : "Record Receipt"
                   )}
                 </Button>
               </div>
@@ -548,14 +661,14 @@ export default function PaymentFormPage() {
               </div>
               <div>
                 <h3 className="text-sm font-medium text-muted-foreground">
-                  {entry.entryType === "PAYABLE" ? "Vendor" : "Customer"}
+                  {getDisplayEntryType(entry) === "PAYABLE" ? "Vendor" : "Customer"}
                 </h3>
                 <p className="font-medium">
                   {entry.vendor
                     ? entry.vendor.name
                     : entry.customer
                     ? entry.customer.name
-                    : "N/A"}
+                    : entry.party || "N/A"}
                 </p>
               </div>
               {entry.reference && (
