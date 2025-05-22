@@ -112,7 +112,50 @@ export function DataTable<TData, TValue>({
             }
 
             const result = await response.json();
-            setData(result.data || []);
+            
+            // Validate response structure before setting data
+            if (Array.isArray(result.data)) {
+                // Ensure each item has expected properties
+                const processedData = result.data.map((item: any) => {
+                    // Handle potential schema differences
+                    return {
+                        ...item,
+                        // Normalize the inventory entries field 
+                        inventoryEntries: item.inventoryEntries || 
+                            (item.inventoryTransaction ? 
+                                Array.isArray(item.inventoryTransaction) ? item.inventoryTransaction : [] 
+                                : []),
+                        // Normalize the fabric productions field
+                        fabricProductions: item.fabricProductions || 
+                            (item.fabricProduction ? 
+                                Array.isArray(item.fabricProduction) ? item.fabricProduction : []
+                                : [])
+                    };
+                });
+                setData(processedData);
+            } else if (result.data && Array.isArray(result.data.data)) {
+                // Handle nested response format
+                const processedData = result.data.data.map((item: any) => {
+                    return {
+                        ...item,
+                        // Normalize the inventory entries field
+                        inventoryEntries: item.inventoryEntries || 
+                            (item.inventoryTransaction ? 
+                                Array.isArray(item.inventoryTransaction) ? item.inventoryTransaction : [] 
+                                : []),
+                        // Normalize the fabric productions field
+                        fabricProductions: item.fabricProductions || 
+                            (item.fabricProduction ? 
+                                Array.isArray(item.fabricProduction) ? item.fabricProduction : []
+                                : [])
+                    };
+                });
+                setData(processedData);
+            } else {
+                setData([]); // Empty array as fallback
+                console.warn('API returned unexpected data format:', result);
+                toast.warning("API returned data in an unexpected format");
+            }
         } catch (error) {
             console.error("Error fetching dyeing processes:", error);
             setError(

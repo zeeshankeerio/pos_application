@@ -192,21 +192,45 @@ export const columns: ColumnDef<DyeingProcessItem>[] = [
             <DataTableColumnHeader column={column} title="Thread Order" />
         ),
         cell: ({ row }) => {
-            const threadType =
-                row.original.threadPurchase?.threadType || "Unknown";
+            const threadPurchase = row.original.threadPurchase;
+            const threadType = threadPurchase?.threadType || "Unknown";
+            const threadId = row.getValue("threadPurchaseId") || "N/A";
+            
+            const colorInfo = threadPurchase?.color 
+                ? <span> | Color: {threadPurchase.color}</span>
+                : null;
+                
             return (
                 <div className="flex flex-col">
                     <div className="font-medium">
-                        #{row.getValue("threadPurchaseId")}
+                        #{String(threadId)}: {String(threadType)}
+                        {threadPurchase?.quantity && (
+                            <span>
+                                {" "}({threadPurchase.quantity}{" "}
+                                {threadPurchase.unitOfMeasure || "units"})
+                            </span>
+                        )}
                     </div>
-                    <div className="text-muted-foreground text-xs">
-                        {threadType}
-                    </div>
+                    {threadPurchase?.colorStatus && (
+                        <div className="text-muted-foreground text-xs">
+                            Status: {threadPurchase.colorStatus}
+                            {colorInfo}
+                        </div>
+                    )}
                 </div>
             );
         },
         filterFn: (row, id, value) => {
-            return String(row.getValue(id)).includes(value);
+            // Case-insensitive search on thread type, color, and ID
+            const searchValue = value.toLowerCase();
+            const threadInfo = row.original.threadPurchase;
+            const threadId = String(row.getValue(id));
+            
+            return (
+                threadId.includes(searchValue) ||
+                (threadInfo?.threadType || "").toLowerCase().includes(searchValue) ||
+                (threadInfo?.color || "").toLowerCase().includes(searchValue)
+            );
         },
     },
 

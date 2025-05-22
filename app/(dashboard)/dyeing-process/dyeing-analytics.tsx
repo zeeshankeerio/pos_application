@@ -103,6 +103,23 @@ const renderCustomizedLabel = ({
     );
 };
 
+// Default analytics data for when API fails
+const DEFAULT_ANALYTICS_DATA: AnalyticsData = {
+    threadInventory: {
+        dyedThreadsInStock: 0,
+        threadsWaitingToBeDyed: 0,
+    },
+    fabricMetrics: {
+        fabricInInventory: 0,
+        fabricInProduction: 0,
+        fabricSold: 0,
+        fabricFromDyedThreads: 0,
+    },
+    dyeingTrends: [],
+    popularColors: [],
+    statusDistribution: [],
+};
+
 export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -127,7 +144,15 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
                 if (result.success && result.data) {
                     setAnalyticsData(result.data);
                 } else {
-                    throw new Error(result.error || "Invalid response format");
+                    // If API reports error, use the data it returns anyway (it should be zeroed out)
+                    if (result.data) {
+                        setAnalyticsData(result.data);
+                        if (result.error) {
+                            setError(`API returned data with errors: ${result.error}`);
+                        }
+                    } else {
+                        throw new Error(result.error || "Invalid response format");
+                    }
                 }
             } catch (error) {
                 console.error("Error fetching analytics:", error);
@@ -136,23 +161,9 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
                         ? error.message
                         : "Failed to load analytics data",
                 );
-                toast.error("Failed to load analytics data");
+                toast.error("Analytics data not available. Using placeholder data.");
                 // Initialize with default data structure
-                setAnalyticsData({
-                    threadInventory: {
-                        dyedThreadsInStock: 0,
-                        threadsWaitingToBeDyed: 0,
-                    },
-                    fabricMetrics: {
-                        fabricInInventory: 0,
-                        fabricInProduction: 0,
-                        fabricSold: 0,
-                        fabricFromDyedThreads: 0,
-                    },
-                    dyeingTrends: [],
-                    popularColors: [],
-                    statusDistribution: [],
-                });
+                setAnalyticsData(DEFAULT_ANALYTICS_DATA);
             } finally {
                 setLoading(false);
             }
@@ -171,36 +182,32 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
         );
     }
 
-    if (!analyticsData) {
-        return (
-            <div className="flex flex-col items-center justify-center py-8">
-                <AlertCircle className="text-destructive mb-2 h-8 w-8" />
-                <h3 className="text-lg font-medium">
-                    Unable to load analytics
-                </h3>
-                {error && (
-                    <p className="text-muted-foreground mt-1 text-sm">
-                        {error}
-                    </p>
-                )}
-            </div>
-        );
+    // Always use either the fetched data or default data
+    // This ensures we don't try to render with null data
+    const safeData = analyticsData || DEFAULT_ANALYTICS_DATA;
+
+    // Show a warning if we have an error but are using default data
+    if (error) {
+        toast.warning("Using default data due to API error", {
+            id: "analytics-error",
+            duration: 3000,
+        });
     }
 
     // Prepare data for fabric pie chart with null checks
     const fabricData = [
         {
             name: "In Inventory",
-            value: analyticsData.fabricMetrics?.fabricInInventory || 0,
+            value: safeData.fabricMetrics?.fabricInInventory || 0,
         },
         {
             name: "In Production",
-            value: analyticsData.fabricMetrics?.fabricInProduction || 0,
+            value: safeData.fabricMetrics?.fabricInProduction || 0,
         },
-        { name: "Sold", value: analyticsData.fabricMetrics?.fabricSold || 0 },
+        { name: "Sold", value: safeData.fabricMetrics?.fabricSold || 0 },
         {
             name: "From Dyed Threads",
-            value: analyticsData.fabricMetrics?.fabricFromDyedThreads || 0,
+            value: safeData.fabricMetrics?.fabricFromDyedThreads || 0,
         },
     ].filter((item) => item.value > 0);
 
@@ -208,17 +215,17 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
     const threadData = [
         {
             name: "Dyed Threads",
-            value: analyticsData.threadInventory?.dyedThreadsInStock || 0,
+            value: safeData.threadInventory?.dyedThreadsInStock || 0,
         },
         {
             name: "Waiting to be Dyed",
-            value: analyticsData.threadInventory?.threadsWaitingToBeDyed || 0,
+            value: safeData.threadInventory?.threadsWaitingToBeDyed || 0,
         },
     ].filter((item) => item.value > 0);
 
     // Format color chart data
     const colorData =
-        analyticsData.popularColors?.map((color, index) => ({
+        safeData.popularColors?.map((color, index) => ({
             name: color.name,
             value: color.count,
             fill: color.name.startsWith("#")
@@ -228,7 +235,7 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
 
     // Format status distribution data
     const statusData =
-        analyticsData.statusDistribution?.map((item) => ({
+        safeData.statusDistribution?.map((item) => ({
             name: formatStatusName(item.status),
             value: item.count,
             fill:
@@ -246,7 +253,7 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
     const hasColorData = colorData.length > 0;
     const hasStatusData = statusData.length > 0;
     const hasTrendData =
-        analyticsData.dyeingTrends && analyticsData.dyeingTrends.length > 0;
+        safeData.dyeingTrends && safeData.dyeingTrends.length > 0;
 
     return (
         <div className="space-y-6">
@@ -289,7 +296,7 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
                             <CardContent className="px-3 pt-0 pb-3">
                                 <div className="text-2xl font-bold text-blue-600">
                                     {(
-                                        analyticsData.fabricMetrics
+                                        safeData.fabricMetrics
                                             ?.fabricInInventory || 0
                                     ).toLocaleString()}{" "}
                                     <span className="text-sm">m</span>
@@ -308,7 +315,7 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
                             <CardContent className="px-3 pt-0 pb-3">
                                 <div className="text-2xl font-bold text-green-600">
                                     {(
-                                        analyticsData.fabricMetrics
+                                        safeData.fabricMetrics
                                             ?.fabricInProduction || 0
                                     ).toLocaleString()}{" "}
                                     <span className="text-sm">m</span>
@@ -327,7 +334,7 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
                             <CardContent className="px-3 pt-0 pb-3">
                                 <div className="text-2xl font-bold text-pink-600">
                                     {(
-                                        analyticsData.fabricMetrics
+                                        safeData.fabricMetrics
                                             ?.fabricSold || 0
                                     ).toLocaleString()}{" "}
                                     <span className="text-sm">m</span>
@@ -348,7 +355,7 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
                             <CardContent className="px-3 pt-0 pb-3">
                                 <div className="text-2xl font-bold text-purple-600">
                                     {(
-                                        analyticsData.fabricMetrics
+                                        safeData.fabricMetrics
                                             ?.fabricFromDyedThreads || 0
                                     ).toLocaleString()}{" "}
                                     <span className="text-sm">m</span>
@@ -431,7 +438,7 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
                             <CardContent className="px-3 pt-0 pb-3">
                                 <div className="text-2xl font-bold text-purple-600">
                                     {(
-                                        analyticsData.threadInventory
+                                        safeData.threadInventory
                                             ?.dyedThreadsInStock || 0
                                     ).toLocaleString()}{" "}
                                     <span className="text-sm">units</span>
@@ -450,7 +457,7 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
                             <CardContent className="px-3 pt-0 pb-3">
                                 <div className="text-2xl font-bold text-amber-600">
                                     {(
-                                        analyticsData.threadInventory
+                                        safeData.threadInventory
                                             ?.threadsWaitingToBeDyed || 0
                                     ).toLocaleString()}{" "}
                                     <span className="text-sm">units</span>
@@ -615,7 +622,7 @@ export function DyeingAnalytics({ refreshTrigger = 0 }: DyeingAnalyticsProps) {
                         <CardContent className="pt-4">
                             <ResponsiveContainer width="100%" height={250}>
                                 <BarChart
-                                    data={analyticsData.dyeingTrends || []}
+                                    data={safeData.dyeingTrends || []}
                                 >
                                     <CartesianGrid strokeDasharray="3 3" />
                                     <XAxis dataKey="month" />
