@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "devCommand": "npm run dev",
+  "git": {
+    "deploymentEnabled": {
+      "main": true
+    }
+  },
+  "env": {
+    "NEXT_PUBLIC_APP_URL": {
+      "development": "http://localhost:3000",
+      "production": "https://${VERCEL_URL}"
+    }
+  }
+} 
