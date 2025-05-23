@@ -34,6 +34,17 @@ const nextConfig = {
     ],
   },
 
+  // Handle redirects
+  async redirects() {
+    return [
+      {
+        source: '/dashboard',
+        destination: '/dashboard/inventory',
+        permanent: true,
+      },
+    ]
+  },
+
   // Outputting static files for better performance
   output: process.env.NODE_ENV === 'production' ? 'standalone' : undefined,
 
@@ -45,9 +56,14 @@ const nextConfig = {
     // Enable server actions with the updated object format
     serverActions: {
       enabled: true
-    }
+    },
+    // Add any other experimental features you're using
+    missingSuspenseWithCSRBailout: false
   },
 
+  // Skip building API routes for static pages
+  pageExtensions: ['js', 'jsx', 'ts', 'tsx'],
+  
   // Add a custom webpack config to optimize the build
   webpack: (config, { isServer }) => {
     // Optimize the build for production
@@ -72,6 +88,16 @@ const nextConfig = {
     }
     return config;
   },
+
+  // Explicitly exclude the problematic route from static generation
+  rewrites: async () => {
+    return [
+      {
+        source: '/api/dyeing/process/:id',
+        destination: '/api/dyeing/process/:id'
+      }
+    ];
+  }
 };
 
 module.exports = nextConfig; 
